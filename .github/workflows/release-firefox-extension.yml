@@ -487,7 +487,7 @@ jobs:
             fi
             echo "asset propagation not complete (attempt $attempt/6); waiting 10s"
             sleep 10
-          fi
+          done
 
           if [ ! -s "$tmp/updates.json" ] || [ ! -s "$tmp/$XPI_NAME" ]; then
             echo "FAIL: post-release verification could not download one or more assets." >&2
