@@ -1,0 +1,75 @@
+# Maintainer: PLFJY <plfjy@localhost>
+#
+# Credential Portal sidecar frontend, built from the xdg-desktop-portal source
+# tree on the sidecar/credential-portal branch.
+#
+# This package installs ONLY the sidecar frontend surface: the
+# credentials-portal-sidecar executable, its systemd user unit, and its D-Bus
+# activation service, all under the dedicated bus name
+# io.github.PLFJY.CredentialPortal. It deliberately does NOT declare
+# provides/conflicts/replaces on xdg-desktop-portal and may coexist with the
+# standard distro xdg-desktop-portal package.
+#
+# Development-only: this sidecar does not replace distro Portal files, does not
+# start any ceremony, and does not enable any global service.
+
+pkgname=xdg-credential-portal-sidecar-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Experimental Credential Portal sidecar frontend built from xdg-desktop-portal (io.github.PLFJY.CredentialPortal)'
+arch=('x86_64')
+url='https://github.com/linux-credentials/xdg-desktop-portal'
+license=('LGPL-2.1-or-later')
+depends=(
+  'glib2'
+  'json-glib'
+  'fuse3'
+  'gdk-pixbuf2'
+  'gst-plugins-base-libs'
+  'libpipewire'
+  'libwireplumber'
+  'dbus'
+  'libdex'
+  'geoclue'
+  'systemd-libs'
+  'systemd'
+)
+makedepends=('meson' 'ninja' 'git' 'pkgconf')
+source=("$pkgname::git+file:///home/plfjy/xdg-desktop-portal#branch=sidecar/credential-portal")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  # sidecar_install=true restricts the install to the sidecar surface
+  # (executable, systemd unit, D-Bus service). Optional portals/features not
+  # relevant to the Credential portal are disabled for a minimal, reproducible
+  # build; tests/docs/man-pages are disabled to avoid pulling test-only deps.
+  meson setup build --prefix=/usr \
+    --libexecdir=/usr/lib \
+    -Dportal_bus_name=io.github.PLFJY.CredentialPortal \
+    -Dportal_binary_name=credentials-portal-sidecar \
+    -Dportal_systemd_unit_name=credentials-portal-sidecar.service \
+    -Dportal_dbus_service_name=io.github.PLFJY.CredentialPortal.service \
+    -Dsidecar_install=true \
+    -Dgeoclue=enabled \
+    -Dgudev=disabled \
+    -Dflatpak-interfaces=disabled \
+    -Dsystemd=enabled \
+    -Dtests=disabled \
+    -Ddocumentation=disabled \
+    -Dman-pages=disabled
+  ninja -C build
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  meson install -C build --destdir="$pkgdir"
+
+  install -Dm644 LICENSES/LGPL-2.1-or-later.txt \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

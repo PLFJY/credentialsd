@@ -1,0 +1,70 @@
+# Maintainer: PLFJY <plfjy@localhost>
+#
+# credentialsd daemon and UI built from the integration/credential-portal-sidecar
+# branch. This package contains the daemon, UI, D-Bus services, systemd user
+# units, portal config, GResource/schema data, icons, locales and docs.
+#
+# It does NOT contain the Firefox/Chromium webextension surface; that ships in
+# credentialsd-webextension-sidecar-git. Package roots are kept disjoint.
+#
+# Cargo is invoked with --locked (-Dcargo_locked=true) against the checked-in
+# Cargo.lock. No downloads occur during package(); cargo crate resolution
+# happens during build().
+
+pkgname=credentialsd-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Credential manager daemon and UI (WebAuthn passkeys) built from the credential-portal-sidecar integration branch'
+arch=('x86_64')
+url='https://github.com/linux-credentials/credentialsd'
+license=('LGPL-3.0-only')
+# Disable LTO: makepkg's default OPTIONS=(lto) appends -flto=auto to CFLAGS,
+# which causes ring's C/asm objects (compiled via the cc crate) to be emitted
+# as LLVM/GIMPLE bitcode that rust-lld cannot link, producing undefined-symbol
+# errors for ring_core_* symbols. The meson build already forces
+# CARGO_PROFILE_RELEASE_LTO=false for the Rust-side LTO.
+options=(!lto)
+depends=(
+  'dbus'
+  'glib2'
+  'gtk4'
+  'openssl'
+  'systemd-libs'
+  'pcsclite'
+  'libnfc'
+  'hidapi'
+  'hicolor-icon-theme'
+)
+makedepends=('meson' 'ninja' 'rust' 'git' 'cargo' 'zip' 'pkgconf' 'systemd' 'gettext')
+source=("$pkgname::git+file:///home/plfjy/credentialsd-sidecar#branch=integration/credential-portal-sidecar")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  meson setup build --prefix=/usr \
+    -Dprofile=default \
+    -Dcargo_locked=true \
+    -Dcargo_lto=false \
+    -Dcargo_home=/home/plfjy/.cargo
+  ninja -C build
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  meson install -C build --destdir="$pkgdir"
+
+  # The Firefox/Chromium webextension surface ships in
+  # credentialsd-webextension-sidecar-git; keep these package roots disjoint.
+  rm -rf "$pkgdir/usr/lib/mozilla"
+  rm -f "$pkgdir/usr/share/credentialsd/credentialsd-firefox-helper.xpi"
+  rm -f "$pkgdir/usr/share/credentialsd/credentialsd-chromium-helper.zip"
+  rm -f "$pkgdir/usr/bin/credentialsd-firefox-helper"
+
+  install -Dm644 LICENSE.md \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
