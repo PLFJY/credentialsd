@@ -146,6 +146,29 @@ package() {
     return 1
   fi
 
+  # Desktop-agnostic portal selection: the sidecar frontend must ship its
+  # dedicated credentials-sidecar-portals.conf (installed by the credentialsd
+  # Meson build) and the sidecar unit drop-in that pins the sidecar's own
+  # XDG_CURRENT_DESKTOP=credentials-sidecar. Neither depends on the user's real
+  # desktop environment, and no desktop-specific *-portals.conf is installed or
+  # overwritten by this package.
+  if [ ! -f "$pkgdir/usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf" ]; then
+    error "missing credentials-sidecar-portals.conf in sidecar package"
+    return 1
+  fi
+  if [ ! -f "$pkgdir/usr/lib/systemd/user/credentials-portal-sidecar.service.d/credentials-sidecar.conf" ]; then
+    error "missing sidecar unit drop-in credentials-sidecar.conf"
+    return 1
+  fi
+  # No desktop-specific portal configuration may be installed or overwritten.
+  for forbidden_conf in \
+      gnome-portals.conf kde-portals.conf hyprland-portals.conf portals.conf; do
+    if [ -e "$pkgdir/usr/share/xdg-desktop-portal/$forbidden_conf" ]; then
+      error "package must not install/overwrite desktop-specific $forbidden_conf"
+      return 1
+    fi
+  done
+
   # Licenses
   install -Dm644 "$srcdir/credentialsd/LICENSE.md" \
     "$pkgdir/usr/share/licenses/$pkgname/credentialsd-LICENSE.md"

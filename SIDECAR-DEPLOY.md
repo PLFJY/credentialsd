@@ -1,6 +1,8 @@
 # Credential Portal Sidecar 部署指南
 
-本文档描述如何在 Arch Linux + Hyprland 上部署 Firefox Hybrid QR Passkey 方案。
+本文档描述如何在 Arch Linux 上部署 Firefox Hybrid QR Passkey 方案。该方案与
+桌面环境无关，支持 GNOME、KDE Plasma、Hyprland、sway 等任何具备可用图形
+D-Bus 会话与 systemd 用户服务的桌面环境。
 
 ## 架构
 
@@ -9,12 +11,13 @@ Firefox WebExtension → Native Messaging shim → io.github.PLFJY.CredentialPor
 → Credential Portal frontend → credentialsd daemon/UI → Hybrid QR → 手机 Passkey
 ```
 
-系统级 `org.freedesktop.portal.Desktop` 和 `xdg-desktop-portal-hyprland` 不受影响。
+系统级 `org.freedesktop.portal.Desktop` 及其各桌面自带的后端配置不受影响。
 
 ## 前置条件
 
-- Arch Linux + Hyprland
+- Arch Linux
 - Firefox 140+ (原生包，非 Snap/Flatpak)
+- 具有用户 D-Bus 与 systemd 用户服务的图形桌面会话（GNOME、KDE Plasma、Hyprland、sway 等均可；Hyprland 仅为已测试环境之一，非架构要求）
 - Rust toolchain (stable)
 - meson >= 1.5, ninja, pkg-config
 
@@ -58,17 +61,49 @@ sudo ninja -C build install
 
 ## 配置
 
-### Portal 后端选择
+### Portal 后端选择（桌面环境无关）
 
-credentialsd 安装时会安装 `credentialsd.portal`，其中包含 `UseIn=Hyprland;`，确保 xdg-desktop-portal 在 Hyprland 下选择 credentialsd 作为 Credential 接口的后端。
+后端选择不依赖用户的真实桌面环境。Credential Portal sidecar 通过自身独立的
+桌面标识 `credentials-sidecar` 进行后端选择，与系统级
+`org.freedesktop.portal.Desktop` 完全隔离。
 
-如果需要手动配置，创建 `~/.config/xdg-desktop-portal/portals.conf`:
+具体机制：
 
-```ini
-[preferred]
-default=hyprland;gtk
-org.freedesktop.impl.portal.experimental.Credential=credentialsd
-```
+1. sidecar 的 systemd 用户单元通过 drop-in
+   `/usr/lib/systemd/user/credentials-portal-sidecar.service.d/credentials-sidecar.conf`
+   仅覆盖 sidecar 进程自身的环境：
+
+   ```ini
+   [Service]
+   Environment=XDG_CURRENT_DESKTOP=credentials-sidecar
+   Environment=XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=credential
+   ```
+
+   该 override 只影响 sidecar 进程，不修改标准 `xdg-desktop-portal.service`，
+   也不触碰用户真实的桌面会话环境或全局 `XDG_CURRENT_DESKTOP`。
+
+2. 与之配套的前端配置
+   `/usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf`
+   （文件名与 `XDG_CURRENT_DESKTOP` 的小写值一致）只对 sidecar 生效：
+
+   ```ini
+   [preferred]
+   default=none
+   org.freedesktop.impl.portal.experimental.Credential=credentialsd
+   ```
+
+   除 Credential 接口外，其余后端接口在 sidecar 中均解析为 `none`。
+
+3. `credentialsd.portal` 的 `UseIn=credentials-sidecar;` 仅作为遗留兜底，
+   不再枚举任何真实桌面环境（如 GNOME/KDE/Hyprland/sway）。
+
+正常情况下**无需**用户创建 `~/.config/xdg-desktop-portal/portals.conf`。该方案
+不会安装或修改任何桌面自带的 `gnome-portals.conf`、`kde-portals.conf`、
+`hyprland-portals.conf` 或通用 `portals.conf`，也不会写入用户家目录。
+
+标准 Portal 仍然使用用户真实的 `XDG_CURRENT_DESKTOP` 及其桌面自带配置，
+FileChooser、ScreenCast、Screenshot、Settings、OpenURI、RemoteDesktop、
+GlobalShortcuts 等接口的后端选择不受影响。
 
 ### App ID
 
@@ -242,7 +277,9 @@ systemctl --user status xyz.iinuwa.credentialsd.UiControl.service
 | `credentialsd/src/gateway/mod.rs` | 添加 `/usr/lib/credentials-portal-sidecar` 到 trusted_caller_paths |
 | `webext/app/meson.build` | APP_ID 从 `org.mozilla.firefox` 改为 `firefox` |
 | `webext/add-on/manifest.firefox.json` | matches 从特定网站改为 `https://*/*` |
-| `portal/credentialsd.portal` | 添加 `UseIn=Hyprland;` |
+| `portal/credentialsd.portal` | `UseIn` 改为 `credentials-sidecar;`（仅遗留兜底，不再枚举真实桌面） |
+| `portal/credentials-sidecar-portals.conf` | 新增 sidecar 专用前端配置（`default=none` + Credential=credentialsd） |
+| `systemd/credentials-portal-sidecar.service.d/credentials-sidecar.conf` | 新增 sidecar 单元 drop-in，仅覆盖 sidecar 自身 `XDG_CURRENT_DESKTOP=credentials-sidecar` |
 | `meson.options` | 新增 `firefox_portal_bus_name` 选项 |
 | `xdg-desktop-portal` meson 选项 | 新增 sidecar 安装支持 |
 
@@ -267,10 +304,21 @@ rm -rf /tmp/credentialsd-ext
 
 ### Credential 接口未注册
 
-检查 `credentialsd.portal` 是否包含 `UseIn=Hyprland;`：
+检查 sidecar 是否使用独立桌面标识 `credentials-sidecar`（应由 drop-in 覆盖，
+不依赖真实桌面）：
 
 ```sh
+systemctl --user show credentials-portal-sidecar.service -p Environment
+# 应包含 XDG_CURRENT_DESKTOP=credentials-sidecar
+# 以及 XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=credential
+```
+
+检查 sidecar 专用前端配置是否存在且只选择 Credential：
+
+```sh
+cat /usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf
 cat /usr/share/xdg-desktop-portal/portals/credentialsd.portal
+# credentialsd.portal 的 UseIn 应为 credentials-sidecar;（不再是 Hyprland;）
 ```
 
 ### SecurityError: no description
