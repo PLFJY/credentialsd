@@ -8,6 +8,12 @@ else
 endif
 
 cargo_env = ['CARGO_HOME=' + cargo_home]
+# The hidapi crate (transitive via libwebauthn) builds a native static archive
+# that rust-lld fails to resolve under release LTO. Pass CARGO_PROFILE_RELEASE_LTO
+# explicitly so it reaches cargo regardless of the parent environment.
+if get_option('profile') == 'default'
+  cargo_env += 'CARGO_PROFILE_RELEASE_LTO=' + (get_option('cargo_lto') ? 'true' : 'false')
+endif
 message('@0@'.format(cargo_options))
 
 custom_target(

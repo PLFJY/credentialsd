@@ -23,6 +23,12 @@ option(
   description: 'Whether to perform an offline build with Cargo. Defaults to false to download crates from registries.',
 )
 option(
+  'cargo_lto',
+  type: 'boolean',
+  value: false,
+  description: 'Whether to enable Cargo release LTO. Defaults to false because the hidapi crate (transitive via libwebauthn) builds a native static archive that rust-lld fails to resolve under LTO (undefined symbol: hid_close, hid_init, ...). Set to true to match upstream [profile.release] lto = true.',
+)
+option(
   'firefox_portal_bus_name',
   type: 'string',
   value: 'org.freedesktop.portal.Desktop',
