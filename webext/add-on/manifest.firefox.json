@@ -8,8 +8,16 @@
     },
     "browser_specific_settings": {
         "gecko": {
-            "id": "credentialsd-helper@iinuwa.xyz",
-            "strict_min_version": "140.0"
+            "id": "credentialsd-sidecar@plfjy.top",
+            "strict_min_version": "140.0",
+            "update_url": "https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json",
+            "data_collection_permissions": {
+                "required": [
+                    "authenticationInfo",
+                    "browsingActivity",
+                    "websiteContent"
+                ]
+            }
         }
     },
     "background": {

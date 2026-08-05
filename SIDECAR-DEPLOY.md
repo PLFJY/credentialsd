@@ -90,27 +90,129 @@ credentialsd 守护进程 (`xyz.iinuwa.credentialsd.Credentials.service`) 会在
 
 ## 加载 Firefox 扩展
 
-### 临时加载（开发用）
+### 正式安装（用户）
 
-1. Firefox → `about:debugging#/runtime/this-firefox`
-2. 点击 "Load Temporary Add-on..."
-3. 选择 `/usr/share/credentialsd/credentialsd-firefox-helper.xpi`
+正式安装使用 Mozilla AMO 未上架签名（unlisted）的 XPI，该 XPI 仅通过 GitHub Releases 分发：
 
-### 签名安装（正式用）
+1. 下载最新 Release 的签名 XPI：
+   `https://github.com/PLFJY/credentialsd/releases/latest`
+2. Firefox → `about:addons`
+3. 齿轮菜单 → **Install Add-on From File…**
+4. 选择下载的签名 XPI
 
-需要 Firefox 开发者账号和 `web-ext` 工具：
+`makepkg -si` 不会安装 Firefox 扩展，只安装 Linux 端的原生集成。
 
-```sh
-npm install --global web-ext
+### 临时加载（仅开发用）
 
-web-ext sign \
-  --source-dir /path/to/extension-source \
-  --api-key YOUR_API_KEY \
-  --api-secret YOUR_API_SECRET \
-  --channel unlisted
+仅用于开发/测试。Meson 构建会在构建目录生成未签名的 XPI，可临时加载；该 XPI 不会安装到 `/usr`，Firefox 重启后失效。
+
+1. 构建：`ninja -C build`
+2. 定位未签名 XPI（典型路径）：`build/webext/add-on/credentialsd-firefox-helper.xpi`
+3. Firefox → `about:debugging#/runtime/this-firefox`
+4. 点击 "Load Temporary Add-on..."
+5. 选择构建目录中的未签名 XPI
+
+未签名 XPI 不得用于正式安装，也不会出现在 GitHub Release 中。
+
+## 维护者设置
+
+要发布 Firefox 扩展，维护者需要：
+
+- Mozilla 开发者账号（https://addons.mozilla.org/developers/）
+- AMO API 凭据（JWT Issuer + JWT Secret），从 AMO Developer Hub 申请
+- GitHub Environment：`amo-signing`
+  - Environment Secret：`AMO_JWT_ISSUER`
+  - Environment Secret：`AMO_JWT_SECRET`
+- 可选：为 `amo-signing` 环境配置 required reviewer
+
+凭据值不得提交到仓库、写入工作流命令文本、打印到日志、发送到 artifacts，或暴露给 pull request。工作流仅通过步骤环境变量读取：
+
+```yaml
+env:
+  AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+  AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
 ```
 
-签名后的 XPI 可以通过 Firefox 正式安装流程安装，重启后保留。
+示例凭据值不得出现在仓库中。
+
+## 发布 Firefox 版本
+
+1. 更新 `webext/add-on/manifest.firefox.json` 中的 `version`
+2. 本地校验：
+   ```sh
+   python3 scripts/prepare-firefox-extension.py /tmp/credentialsd-ext-prep
+   python3 tests/test_release_manifest_invariants.py
+   python3 tests/test_release_id_consistency.py
+   python3 tests/test_prepare_extension.py /tmp/credentialsd-ext-prep
+   python3 tests/test_update_manifest_generator.py
+   python3 tests/test_packaging_policy.py
+   python3 tests/test_workflow_security.py
+   python3 tests/test_release_no_secrets.py
+   python3 tests/test_release_retired_ids.py
+   python3 tests/test_signed_xpi_structure.py
+   ```
+3. 将改动合并到默认分支
+4. 打开 GitHub Actions
+5. 选择 **Release Firefox Extension** workflow
+6. 设置 `publish=true` 触发发布
+7. 审批 `amo-signing` Environment 部署（如配置了 required reviewer）
+8. 等待 AMO 签名完成
+9. 校验 GitHub Release：tag `firefox-v<VERSION>`，包含 4 个资产：
+   - `credentialsd-sidecar-firefox-<VERSION>.xpi`（Mozilla 签名的新 XPI）
+   - `updates.json`
+   - `SHA256SUMS`
+   - `release-metadata.json`
+10. 下载签名 XPI 安装到 Firefox，在 https://webauthn.io 测试 create/get
+
+工作流不会在 push、pull request 或任意 tag 上自动发布。每次发布都使用新版本号，不得复用已存在的 AMO 版本或 Git tag。
+
+## 自动更新
+
+Firefox 通过扩展 manifest 中声明的 `update_url` 周期性拉取更新清单：
+
+```
+https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json
+```
+
+`updates.json` 中的 `update_link` 使用精确版本化的 Release 资产 URL：
+
+```
+https://github.com/PLFJY/credentialsd/releases/download/firefox-v<VERSION>/credentialsd-sidecar-firefox-<VERSION>.xpi
+```
+
+只有 `updates.json` 这个 URL 是 `releases/latest` 形式；XPI 本身始终指向精确版本。
+
+Firefox 更新 Release 必须是普通 Release：
+
+- 不是 draft
+- 不是 prerelease
+
+否则 Firefox 不会从 `updates.json` 拉取到该版本。
+
+## 用户安装
+
+1. Clone `PLFJY/credentialsd`
+2. 进入 `packaging/credentialsd-firefox-sidecar-git`
+3. 运行 `makepkg -si`
+4. 重启/启动 user services
+5. 从最新 GitHub Release 下载 Mozilla 签名的 XPI
+6. 打开 `about:addons`
+7. 选择 **Install Add-on From File…**
+8. 选择下载的签名 XPI
+9. 在 https://webauthn.io 测试 create/get
+
+`makepkg -si` 不会安装 Firefox 扩展，只安装 Linux 端的原生集成。
+
+## 开发者临时加载
+
+未签名构建产物仅用于开发：
+
+- 仅开发使用
+- 通过 `about:debugging` 临时加载
+- Firefox 重启后失效
+- 不会安装到 `/usr`
+
+临时加载说明不得与正式用户安装说明混用。
 
 ## 验证
 
@@ -191,4 +293,4 @@ journalctl --user -u xyz.iinuwa.credentialsd.Credentials.service --no-pager -n 1
 cat /usr/lib/mozilla/native-messaging-hosts/xyz.iinuwa.credentialsd_helper.json
 ```
 
-确认 `allowed_extensions` 包含 `credentialsd-helper@iinuwa.xyz`。
+确认 `allowed_extensions` 包含 `credentialsd-sidecar@plfjy.top`。

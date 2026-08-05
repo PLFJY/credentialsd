@@ -29,7 +29,7 @@ SHIM_NAME = "credentialsd-firefox-helper"
 MANIFEST_NAME = "xyz.iinuwa.credentialsd_helper.json"
 
 EXPECTED_HOST_NAME = "xyz.iinuwa.credentialsd_helper"
-EXPECTED_EXTENSION_ID = "credentialsd-helper@iinuwa.xyz"
+EXPECTED_EXTENSION_ID = "credentialsd-sidecar@plfjy.top"
 EXPECTED_OBJECT_PATH = "/org/freedesktop/portal/desktop"
 EXPECTED_REGISTRY_INTERFACE = "org.freedesktop.host.portal.Registry"
 EXPECTED_CREDENTIAL_INTERFACE = "org.freedesktop.portal.experimental.Credential"
