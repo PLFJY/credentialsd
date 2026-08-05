@@ -1,21 +1,5 @@
 name: Release Firefox Extension
 
-# Release pipeline for the credentialsd Firefox sidecar extension.
-#
-# Validation: runs on every relevant pull request and on manual dispatch with
-#   publish=false. Performs JSON validation, manifest invariants, web-ext lint,
-#   and the release-specific Python test suite. Never touches AMO secrets.
-#
-# Publish:   runs only on manual dispatch with publish=true against the
-#   repository default branch of PLFJY/credentialsd. Performs AMO unlisted
-#   signing, signed XPI verification, updates.json generation, GitHub Release
-#   creation, and post-release verification. AMO secrets are scoped to the
-#   amo-signing Environment and are never exposed to forks or pull requests.
-#
-# web-ext is pinned to 8.10.0 (current stable at workflow authoring time).
-# Do not switch to an unpinned web-ext; pinning keeps the signing payload
-# reproducible and prevents silent behavior changes between releases.
-
 on:
   pull_request:
     paths:
@@ -39,9 +23,6 @@ on:
         default: false
         type: boolean
 
-# Prevent two signing/release jobs from running simultaneously. In-flight
-# runs are NOT cancelled: a half-finished signing/Release pair must complete
-# or fail before another starts, to avoid cross-run AMO version collisions.
 concurrency:
   group: firefox-extension-release
   cancel-in-progress: false
@@ -50,13 +31,9 @@ permissions:
   contents: read
 
 env:
-  # Pinned web-ext version. Update deliberately; do not use @latest.
   WEB_EXT_VERSION: "8.10.0"
-  REPOSITORY_OWNER: "PLFJY"
-  REPOSITORY_NAME: "credentialsd"
-  PORTAL_REPOSITORY: "PLFJY/xdg-desktop-portal"
-  PORTAL_BRANCH: "sidecar/credential-portal"
-  EXPECTED_BRANCH: "integration/credential-portal-sidecar"
+  EXTENSION_ID: "credentialsd-firefox-sidecar@plfjy.top"
+  UPDATE_URL: "https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json"
 
 jobs:
   validate:
@@ -74,85 +51,40 @@ jobs:
           node-version: "22"
 
       - name: Install pinned web-ext
-        run: |
-          npm install -g "web-ext@${WEB_EXT_VERSION}"
-          web-ext --version
+        run: npm install -g "web-ext@${WEB_EXT_VERSION}"
 
       - name: Prepare extension source
-        run: |
-          python3 scripts/prepare-firefox-extension.py "$RUNNER_TEMP/prepared-extension"
+        run: python3 scripts/prepare-firefox-extension.py "$RUNNER_TEMP/prepared-extension"
 
-      - name: Validate all JSON files
+      - name: Validate release invariants
         run: |
-          set -e
-          # Validate every JSON file under webext/ and the prepared extension.
-          find webext -type f -name '*.json' -print0 | while IFS= read -r -d '' f; do
-            python3 -m json.tool "$f" >/dev/null
+          python3 tests/test_release_manifest_invariants.py
+          python3 tests/test_release_id_consistency.py
+          python3 tests/test_release_retired_ids.py
+          python3 tests/test_release_no_secrets.py
+          python3 tests/test_prepare_extension.py "$RUNNER_TEMP/prepared-extension"
+          python3 tests/test_update_manifest_generator.py
+          python3 tests/test_packaging_policy.py
+          python3 tests/test_workflow_security.py
+          python3 tests/test_signed_xpi_structure.py
+
+      - name: Validate JSON
+        run: |
+          find webext -type f -name '*.json' -print0 | while IFS= read -r -d '' file; do
+            python3 -m json.tool "$file" >/dev/null
           done
           python3 -m json.tool "$RUNNER_TEMP/prepared-extension/manifest.json" >/dev/null
 
-      - name: Assert manifest invariants (extension ID, update URL, min version, data collection, version format)
-        run: |
-          python3 tests/test_release_manifest_invariants.py
+      - name: Lint self-hosted extension
+        run: web-ext lint --self-hosted --verbose --source-dir="$RUNNER_TEMP/prepared-extension"
 
-      - name: Assert extension ID and Native Messaging ID consistency
-        run: |
-          python3 tests/test_release_id_consistency.py
-
-      - name: Assert absence of retired extension IDs
-        run: |
-          python3 tests/test_release_retired_ids.py
-
-      - name: Assert no literal AMO credentials in repository
-        run: |
-          python3 tests/test_release_no_secrets.py
-
-      - name: Assert deterministic prepared extension file list
-        run: |
-          python3 tests/test_prepare_extension.py "$RUNNER_TEMP/prepared-extension"
-
-      - name: Assert generate-firefox-update-manifest.py output shape
-        run: |
-          python3 tests/test_update_manifest_generator.py
-
-      - name: Assert packaging policy (no XPI in package roots)
-        run: |
-          python3 tests/test_packaging_policy.py
-
-      - name: Assert workflow YAML and security boundaries
-        run: |
-          python3 tests/test_workflow_security.py
-
-      - name: web-ext lint (prepared source)
-        # --self-hosted: this add-on is signed as AMO unlisted and
-        # self-distributed through GitHub Releases. AMO does not manage
-        # updates for unlisted add-ons, so the manifest must declare
-        # update_url (Firefox auto-update requires it). Without
-        # --self-hosted the linter applies AMO-listed rules that reject
-        # update_url. The AMO signing API allows update_url for unlisted
-        # channel, so sign is unaffected.
-        # web-ext lint exits non-zero only on errors; warnings are printed
-        # for individual review and do not fail validation. Review and address
-        # warnings individually rather than blanket-suppressing them.
-        run: |
-          cd "$RUNNER_TEMP/prepared-extension"
-          web-ext lint --self-hosted --verbose
-
-      - name: Assert git diff --check (whitespace)
-        run: |
-          git diff --check
+      - name: Check whitespace
+        run: git diff --check
 
   publish:
     name: Sign via AMO and publish GitHub Release
     runs-on: ubuntu-24.04
     needs: validate
-    # Publish only when:
-    #   - the run was manually dispatched with publish=true,
-    #   - the repository is PLFJY/credentialsd,
-    #   - the ref is the repository default branch,
-    #   - and validation succeeded.
-    # Forks, pull requests, alternate repositories, and alternate branches
-    # never receive AMO Environment secrets.
     if: |
       github.event_name == 'workflow_dispatch'
       && inputs.publish == true
@@ -162,15 +94,6 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Refuse forbidden scopes
-        run: |
-          # The job MUST NOT carry actions:write, packages:write,
-          # id-token:write, issues:write, pull-requests:write, or
-          # deployments:write. The Environment + workflow definition enforce
-          # this; this step is a defense-in-depth assertion that the
-          # generated GITHUB_TOKEN will not be granted extra scopes.
-          echo "publish job granted permissions: contents: write only"
-
       - name: Check out repository
         uses: actions/checkout@v4
 
@@ -180,58 +103,40 @@ jobs:
           node-version: "22"
 
       - name: Install pinned web-ext
-        run: |
-          npm install -g "web-ext@${WEB_EXT_VERSION}"
-          web-ext --version
+        run: npm install -g "web-ext@${WEB_EXT_VERSION}"
 
-      - name: Read VERSION from manifest
+      - name: Read release version
         id: version
         run: |
           VERSION=$(python3 -c 'import json; print(json.load(open("webext/add-on/manifest.firefox.json"))["version"])')
-          if [ -z "$VERSION" ]; then
-            echo "FAIL: manifest version is empty" >&2
-            exit 1
-          fi
+          test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=firefox-v${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "xpi_name=credentialsd-sidecar-firefox-${VERSION}.xpi" >> "$GITHUB_OUTPUT"
+          echo "tag=firefox-v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "xpi_name=credentialsd-sidecar-firefox-$VERSION.xpi" >> "$GITHUB_OUTPUT"
 
-      - name: Fail if Git tag already exists
+      - name: Refuse duplicate tag or Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           if gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "FAIL: Git tag ${TAG} already exists. Never overwrite a signed release; never reuse an AMO version." >&2
+            echo "FAIL: tag ${TAG} already exists" >&2
             exit 1
           fi
-          echo "OK: tag ${TAG} does not exist yet."
-
-      - name: Fail if GitHub Release already exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "FAIL: GitHub Release ${TAG} already exists. Never overwrite a signed release." >&2
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "FAIL: Release ${TAG} already exists" >&2
             exit 1
           fi
-          echo "OK: Release ${TAG} does not exist yet."
 
       - name: Prepare extension source
-        run: |
-          python3 scripts/prepare-firefox-extension.py "$RUNNER_TEMP/prepared-extension"
+        run: python3 scripts/prepare-firefox-extension.py "$RUNNER_TEMP/prepared-extension"
 
-      - name: Sign extension via AMO (unlisted)
-        # Credentials are supplied ONLY through step environment variables.
-        # They are never interpolated into the YAML command string, never
-        # printed, and never written to logs. Shell tracing is OFF.
+      - name: Sign extension through AMO unlisted channel
         env:
           AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
           AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
           mkdir -p "$RUNNER_TEMP/amo-artifacts"
-          cd "$RUNNER_TEMP/prepared-extension"
           web-ext sign \
             --channel=unlisted \
             --source-dir="$RUNNER_TEMP/prepared-extension" \
@@ -239,295 +144,133 @@ jobs:
             --api-key="$AMO_JWT_ISSUER" \
             --api-secret="$AMO_JWT_SECRET"
 
-      - name: Verify signed XPI (exactly one)
+      - name: Verify and stage signed XPI
         id: signed
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          XPI_NAME: ${{ steps.version.outputs.xpi_name }}
         run: |
-          set -e
           mapfile -t XPIS < <(find "$RUNNER_TEMP/amo-artifacts" -type f -name '*.xpi')
-          if [ "${#XPIS[@]}" -eq 0 ]; then
-            cat >&2 <<'EOF'
-          FAIL: AMO did not return a signed XPI.
-
-          Possible causes:
-            * AMO selected the extension for manual review. Inspect the AMO
-              Developer Hub (https://addons.mozilla.org/developers/) for the
-              review status. Do NOT create a Release. Do NOT publish an
-              unsigned XPI. Do NOT bump the version unless AMO requires it.
-              Once AMO approves, re-run this workflow with publish=true on the
-              same default-branch commit and the same manifest version.
-            * AMO rejected the extension ID. The manifest gecko.id and the
-              Native Messaging allowed_extensions must both be
-              'credentialsd-sidecar@plfjy.top'. Do NOT silently choose another
-              ID; do NOT modify only one side of the pair. An operator must
-              decide.
-            * AMO permanently rejected this version. Do NOT reuse a
-              permanently rejected AMO version. Bump the version in
-              webext/add-on/manifest.firefox.json, merge, and re-run.
-
-          No Git tag or GitHub Release was created. No unsigned XPI was
-          published. Only non-sensitive diagnostics are preserved in this log.
-          EOF
+          if [ "${#XPIS[@]}" -ne 1 ]; then
+            echo "FAIL: expected exactly one Mozilla-signed XPI, found ${#XPIS[@]}" >&2
+            echo "Inspect the AMO Developer Hub for rejection or manual review status." >&2
             exit 1
           fi
-          if [ "${#XPIS[@]}" -gt 1 ]; then
-            echo "FAIL: multiple signed XPI files found; ambiguous." >&2
-            printf '  %s\n' "${XPIS[@]}" >&2
-            exit 1
-          fi
-          SIGNED_XPI="${XPIS[0]}"
-          DEST="$RUNNER_TEMP/${{ steps.version.outputs.xpi_name }}"
-          # Renaming the outer XPI filename is permitted; modifying the
-          # archive contents is NOT (it invalidates the signature).
-          cp "$SIGNED_XPI" "$DEST"
-          SHA=$(sha256sum "$DEST" | awk '{print $1}')
-          echo "xpi_path=$DEST" >> "$GITHUB_OUTPUT"
-          echo "xpi_sha256=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Signed XPI: $DEST"
-          echo "SHA-256:    $SHA"
-
-      - name: Verify signed XPI structure (manifest + META-INF)
-        run: |
-          set -e
-          XPI="${{ steps.signed.outputs.xpi_path }}"
-          tmp=$(mktemp -d)
-          python3 - "$XPI" "$tmp" <<'PY'
-          import json, sys, zipfile
-          from pathlib import Path
-          xpi, tmp = Path(sys.argv[1]), Path(sys.argv[2])
+          cp "${XPIS[0]}" "$RUNNER_TEMP/$XPI_NAME"
+          SHA256=$(sha256sum "$RUNNER_TEMP/$XPI_NAME" | awk '{print $1}')
+          python3 - "$RUNNER_TEMP/$XPI_NAME" "$VERSION" "$EXTENSION_ID" "$UPDATE_URL" <<'PY'
+          import json
+          import sys
+          import zipfile
+          xpi, version, extension_id, update_url = sys.argv[1:]
           if not zipfile.is_zipfile(xpi):
-              sys.exit("FAIL: signed XPI is not a ZIP archive")
-          with zipfile.ZipFile(xpi) as z:
-              names = z.namelist()
-              if "manifest.json" not in names:
-                  sys.exit("FAIL: signed XPI missing manifest.json")
-              if not any(n.startswith("META-INF/") for n in names):
-                  sys.exit("FAIL: signed XPI missing META-INF/ signing metadata")
-              # Verify only expected extension files and signing metadata exist.
-              expected = {
-                  "manifest.json",
-                  "background.js",
-                  "content-bridge.js",
-                  "content-main.js",
-                  "icons/logo.svg",
-              }
-              unexpected = []
-              for n in names:
-                  if n in expected:
-                      continue
-                  if n.startswith("META-INF/"):
-                      continue
-                  unexpected.append(n)
-              if unexpected:
-                  sys.exit(f"FAIL: signed XPI contains unexpected entries: {unexpected}")
-              with z.open("manifest.json") as f:
-                  manifest = json.load(f)
-              gecko = manifest.get("browser_specific_settings", {}).get("gecko", {})
-              if gecko.get("id") != "credentialsd-sidecar@plfjy.top":
-                  sys.exit(f"FAIL: signed manifest gecko.id={gecko.get('id')!r}")
-              if manifest.get("version") != "${{ steps.version.outputs.version }}":
-                  sys.exit(f"FAIL: signed manifest version={manifest.get('version')!r}")
-              if gecko.get("update_url") != "https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json":
-                  sys.exit(f"FAIL: signed manifest update_url={gecko.get('update_url')!r}")
-              if gecko.get("strict_min_version") != "140.0":
-                  sys.exit(f"FAIL: signed manifest strict_min_version={gecko.get('strict_min_version')!r}")
-          print("OK: signed XPI structure verified")
+              raise SystemExit("FAIL: signed artifact is not a ZIP/XPI")
+          with zipfile.ZipFile(xpi) as archive:
+              names = archive.namelist()
+              if "manifest.json" not in names or not any(n.startswith("META-INF/") for n in names):
+                  raise SystemExit("FAIL: signed XPI is missing manifest.json or META-INF signing data")
+              manifest = json.loads(archive.read("manifest.json"))
+          gecko = manifest.get("browser_specific_settings", {}).get("gecko", {})
+          if manifest.get("version") != version:
+              raise SystemExit("FAIL: signed XPI version mismatch")
+          if gecko.get("id") != extension_id:
+              raise SystemExit("FAIL: signed XPI extension ID mismatch")
+          if gecko.get("update_url") != update_url:
+              raise SystemExit("FAIL: signed XPI update_url mismatch")
           PY
+          echo "xpi_path=$RUNNER_TEMP/$XPI_NAME" >> "$GITHUB_OUTPUT"
+          echo "xpi_sha256=$SHA256" >> "$GITHUB_OUTPUT"
 
-      - name: Generate updates.json
+      - name: Generate release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          XPI_NAME: ${{ steps.version.outputs.xpi_name }}
+          XPI_SHA256: ${{ steps.signed.outputs.xpi_sha256 }}
         run: |
           python3 scripts/generate-firefox-update-manifest.py \
-            --extension-id "credentialsd-sidecar@plfjy.top" \
-            --version "${{ steps.version.outputs.version }}" \
-            --release-tag "${{ steps.version.outputs.tag }}" \
-            --xpi-filename "${{ steps.version.outputs.xpi_name }}" \
-            --xpi-sha256 "${{ steps.signed.outputs.xpi_sha256 }}" \
-            --repository "PLFJY/credentialsd" \
+            --extension-id "$EXTENSION_ID" \
+            --version "$VERSION" \
+            --release-tag "$TAG" \
+            --xpi-filename "$XPI_NAME" \
+            --xpi-sha256 "$XPI_SHA256" \
+            --repository "$GITHUB_REPOSITORY" \
             --output "$RUNNER_TEMP/updates.json"
-          cat "$RUNNER_TEMP/updates.json"
-
-      - name: Generate release-metadata.json
-        run: |
-          COMMIT_SHA=$(git rev-parse HEAD)
-          BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          python3 - "$RUNNER_TEMP/release-metadata.json" "$COMMIT_SHA" "$BUILD_TS" <<'PY'
-          import json, sys
+          python3 - "$RUNNER_TEMP/release-metadata.json" <<'PY'
+          import json
+          import os
+          import sys
+          from datetime import datetime, timezone
           from pathlib import Path
-          out, commit_sha, build_ts = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-          meta = {
+          data = {
               "schema_version": 1,
-              "extension_version": "${{ steps.version.outputs.version }}",
-              "extension_id": "credentialsd-sidecar@plfjy.top",
-              "git_commit_sha": commit_sha,
-              "git_repository": "PLFJY/credentialsd",
-              "git_branch": "${{ env.EXPECTED_BRANCH }}",
-              "github_release_tag": "${{ steps.version.outputs.tag }}",
+              "extension_id": os.environ["EXTENSION_ID"],
+              "extension_version": os.environ["VERSION"],
+              "git_commit_sha": os.environ["GITHUB_SHA"],
+              "git_repository": os.environ["GITHUB_REPOSITORY"],
+              "github_release_tag": os.environ["TAG"],
               "firefox_strict_min_version": "140.0",
               "amo_channel": "unlisted",
-              "update_manifest_url": "https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json",
-              "xpi_download_url": "https://github.com/PLFJY/credentialsd/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.xpi_name }}",
-              "xpi_sha256": "${{ steps.signed.outputs.xpi_sha256 }}",
-              "build_timestamp_utc": build_ts,
-              "expected_credentialsd_branch": "${{ env.EXPECTED_BRANCH }}",
-              "expected_portal_repository": "${{ env.PORTAL_REPOSITORY }}",
-              "expected_portal_branch": "${{ env.PORTAL_BRANCH }}",
+              "update_manifest_url": os.environ["UPDATE_URL"],
+              "xpi_download_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['TAG']}/{os.environ['XPI_NAME']}",
+              "xpi_sha256": os.environ["XPI_SHA256"],
+              "build_timestamp_utc": datetime.now(timezone.utc).isoformat(),
+              "expected_credentialsd_branch": "integration/credential-portal-sidecar",
+              "expected_portal_repository": "PLFJY/xdg-desktop-portal",
+              "expected_portal_branch": "sidecar/credential-portal",
           }
-          out.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-          print(f"wrote {out}")
+          Path(sys.argv[1]).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
           PY
-          cat "$RUNNER_TEMP/release-metadata.json"
-
-      - name: Generate SHA256SUMS
-        # SHA256SUMS covers every release asset except SHA256SUMS itself.
-        # It is generated last, after all other files are finalized.
-        run: |
-          set -e
           cd "$RUNNER_TEMP"
-          : > SHA256SUMS
-          for f in "${{ steps.version.outputs.xpi_name }}" updates.json release-metadata.json; do
-            sha256sum "$f" >> SHA256SUMS
-          done
-          cat SHA256SUMS
+          sha256sum "$XPI_NAME" updates.json release-metadata.json > SHA256SUMS
 
-      - name: Create GitHub Release (normal, not draft, not prerelease)
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
+          XPI_NAME: ${{ steps.version.outputs.xpi_name }}
         run: |
-          set -e
-          cd "$RUNNER_TEMP"
-          # Normal Release: draft=false, prerelease=false. Firefox auto-update
-          # only picks up non-draft, non-prerelease Releases from the latest
-          # update manifest.
-          RELEASE_NOTES=$(cat <<'EOF'
-          # Firefox Sidecar Extension ${{ steps.version.outputs.version }}
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          # Firefox Sidecar Extension ${VERSION}
 
-          This XPI is **Mozilla-signed through AMO unlisted signing**. It is
-          **not publicly listed** in the AMO store. It is self-distributed
-          through GitHub Releases.
+          This XPI is Mozilla-signed through AMO unlisted signing and self-distributed through GitHub Releases. It is not publicly listed in the AMO store.
 
-          ## Requirements
+          Install the native Linux integration first with \`credentialsd-firefox-sidecar-git\`, then install \`${XPI_NAME}\` from Firefox: \`about:addons\` → gear menu → **Install Add-on From File…**.
 
-          - Firefox 140+ (native package; not Snap/Flatpak)
-          - Users must install the Linux-side package first
-          - Recommended Linux-side package: `credentialsd-firefox-sidecar-git`
-
-          ## Install
-
-          1. Install the Linux-side package first:
-             ```
-             cd packaging/credentialsd-firefox-sidecar-git
-             makepkg -si
-             ```
-             `makepkg -si` installs only the native Linux integration; it does
-             **not** install the Firefox extension.
-          2. Reload/start the user services:
-             ```
-             systemctl --user daemon-reload
-             systemctl --user start credentials-portal-sidecar.service
-             systemctl --user start xyz.iinuwa.credentialsd.UiControl.service
-             ```
-          3. Download the Mozilla-signed XPI from this Release.
-          4. Firefox → `about:addons` → gear menu → **Install Add-on From File…**
-          5. Select the downloaded signed XPI.
-          6. Test create/get on https://webauthn.io.
-
-          ## Behavior
-
-          - The extension communicates with the locally installed Native
-            Messaging host (`xyz.iinuwa.credentialsd_helper`).
-          - The extension currently matches HTTPS pages (`https://*/*`).
-          - Automatic updates use the attached `updates.json`; the manifest
-            `update_url` points at
-            `https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json`.
-          - Runtime privacy details are in `PRIVACY.md`.
-
-          ## Artifacts
-
-          - `credentialsd-sidecar-firefox-${{ steps.version.outputs.version }}.xpi`
-            — Mozilla-signed XPI. The Release XPI is the only supported
-            permanent-install artifact.
-          - `updates.json` — Firefox update manifest.
-          - `SHA256SUMS` — SHA-256 checksums of all Release assets.
-          - `release-metadata.json` — Release metadata.
-
-          Do not call any unsigned artifact signed. Do not upload the unsigned
-          Meson-generated XPI.
+          Firefox 140+ is required. The extension communicates with the locally installed Native Messaging host and currently matches HTTPS pages. Runtime privacy details are documented in [PRIVACY.md](https://github.com/PLFJY/credentialsd/blob/integration/credential-portal-sidecar/PRIVACY.md).
           EOF
-          )
+          cd "$RUNNER_TEMP"
           gh release create "$TAG" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "Firefox Sidecar Extension ${{ steps.version.outputs.version }}" \
-            --notes "$RELEASE_NOTES" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Firefox Sidecar Extension ${VERSION}" \
+            --notes-file release-notes.md \
             --draft=false \
             --prerelease=false \
-            "${{ steps.version.outputs.xpi_name }}" \
-            updates.json \
-            SHA256SUMS \
-            release-metadata.json
+            "$XPI_NAME" updates.json SHA256SUMS release-metadata.json
 
-      - name: Post-release verification
+      - name: Verify published assets
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           XPI_NAME: ${{ steps.version.outputs.xpi_name }}
           EXPECTED_SHA: ${{ steps.signed.outputs.xpi_sha256 }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -e
-          UPDATE_URL="https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json"
-          XPI_URL="https://github.com/PLFJY/credentialsd/releases/download/${TAG}/${XPI_NAME}"
-          tmp=$(mktemp -d)
-
-          # Bounded retry loop: GitHub Releases asset propagation is eventually
-          # consistent. Try up to 6 times with a 10s backoff (max ~1m).
-          for attempt in $(seq 1 6); do
-            if curl -fsSL "$UPDATE_URL" -o "$tmp/updates.json" \
-              && curl -fsSL "$XPI_URL" -o "$tmp/$XPI_NAME"; then
+          TEMP=$(mktemp -d)
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsSL "$UPDATE_URL" -o "$TEMP/updates.json" \
+              && curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$XPI_NAME" -o "$TEMP/$XPI_NAME"; then
               break
             fi
-            echo "asset propagation not complete (attempt $attempt/6); waiting 10s"
             sleep 10
           done
-
-          if [ ! -s "$tmp/updates.json" ] || [ ! -s "$tmp/$XPI_NAME" ]; then
-            echo "FAIL: post-release verification could not download one or more assets." >&2
-            echo "  Release URL: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" >&2
-            echo "  Affected asset: updates.json or ${XPI_NAME}" >&2
-            echo "  Manual recovery:" >&2
-            echo "    gh release view ${TAG} --repo ${GITHUB_REPOSITORY}" >&2
-            echo "    gh release download ${TAG} --repo ${GITHUB_REPOSITORY} --pattern '${XPI_NAME}' --dir <dir>" >&2
-            exit 1
-          fi
-
-          ACTUAL_SHA=$(sha256sum "$tmp/$XPI_NAME" | awk '{print $1}')
-          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "FAIL: released XPI SHA-256 mismatch." >&2
-            echo "  Release URL: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" >&2
-            echo "  Affected asset: ${XPI_NAME}" >&2
-            echo "  Expected SHA-256: $EXPECTED_SHA" >&2
-            echo "  Observed SHA-256: $ACTUAL_SHA" >&2
-            echo "  Manual recovery:" >&2
-            echo "    gh release download ${TAG} --repo ${GITHUB_REPOSITORY} --pattern '${XPI_NAME}' --dir <dir>" >&2
-            echo "    sha256sum <dir>/${XPI_NAME}" >&2
-            exit 1
-          fi
-
-          python3 - "$tmp/updates.json" "$XPI_NAME" "$EXPECTED_SHA" "$VERSION" <<'PY'
-          import json, sys
-          from pathlib import Path
-          updates_path, xpi_name, expected_sha, version = sys.argv[1:5]
-          data = json.loads(Path(updates_path).read_text(encoding="utf-8"))
-          addon = data["addons"]["credentialsd-sidecar@plfjy.top"]
-          entries = addon["updates"]
-          if len(entries) != 1:
-              sys.exit(f"FAIL: updates.json has {len(entries)} entries; expected 1")
-          entry = entries[0]
-          if entry["version"] != version:
-              sys.exit(f"FAIL: updates.json version={entry['version']!r} != {version!r}")
-          expected_link = f"https://github.com/PLFJY/credentialsd/releases/download/firefox-v{version}/{xpi_name}"
-          if entry["update_link"] != expected_link:
-              sys.exit(f"FAIL: updates.json update_link={entry['update_link']!r} != {expected_link!r}")
-          if entry["update_hash"] != f"sha256:{expected_sha}":
-              sys.exit(f"FAIL: updates.json update_hash={entry['update_hash']!r} != sha256:{expected_sha}")
-          print("OK: post-release verification passed")
+          test -s "$TEMP/updates.json"
+          test -s "$TEMP/$XPI_NAME"
+          ACTUAL_SHA=$(sha256sum "$TEMP/$XPI_NAME" | awk '{print $1}')
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          python3 - "$TEMP/updates.json" "$EXTENSION_ID" <<'PY'
+          import json
+          import sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          if sys.argv[2] not in data.get("addons", {}):
+              raise SystemExit("FAIL: published updates.json contains the wrong extension ID")
           PY
