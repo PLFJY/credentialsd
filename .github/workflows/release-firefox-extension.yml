@@ -124,12 +124,19 @@ jobs:
           python3 tests/test_workflow_security.py
 
       - name: web-ext lint (prepared source)
+        # --self-hosted: this add-on is signed as AMO unlisted and
+        # self-distributed through GitHub Releases. AMO does not manage
+        # updates for unlisted add-ons, so the manifest must declare
+        # update_url (Firefox auto-update requires it). Without
+        # --self-hosted the linter applies AMO-listed rules that reject
+        # update_url. The AMO signing API allows update_url for unlisted
+        # channel, so sign is unaffected.
         # web-ext lint exits non-zero only on errors; warnings are printed
         # for individual review and do not fail validation. Review and address
         # warnings individually rather than blanket-suppressing them.
         run: |
           cd "$RUNNER_TEMP/prepared-extension"
-          web-ext lint --verbose
+          web-ext lint --self-hosted --verbose
 
       - name: Assert git diff --check (whitespace)
         run: |
