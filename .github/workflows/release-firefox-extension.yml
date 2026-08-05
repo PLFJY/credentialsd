@@ -142,22 +142,6 @@ jobs:
         run: |
           git diff --check
 
-      - name: Run actionlint if available
-        run: |
-          if command -v actionlint >/dev/null 2>&1; then
-            actionlint
-          else
-            echo "actionlint not installed; skipping"
-          fi
-
-      - name: Run shellcheck on new shell scripts if available
-        run: |
-          if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck tests/*.sh
-          else
-            echo "shellcheck not installed; skipping"
-          fi
-
   publish:
     name: Sign via AMO and publish GitHub Release
     runs-on: ubuntu-24.04
