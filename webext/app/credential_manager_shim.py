@@ -26,6 +26,10 @@ logging.basicConfig(
 
 APP_ID = "@APP_ID@"
 DBUS_DOC_FILE = "@DBUS_DOC_FILE@"
+# Build-time D-Bus destination for the Credential Portal frontend. The shim
+# does not accept this value from page content, extension messages,
+# environment variables, or any other untrusted runtime input.
+PORTAL_BUS_NAME = "@PORTAL_BUS_NAME@"
 INTERFACE: Optional[BaseProxyInterface] = None
 
 
@@ -43,9 +47,10 @@ def getMessage():
         logging.error("Failed to convert rawLength to integer", exc_info=e)
     try:
         raw_msg = sys.stdin.buffer.read(messageLength)
-        logging.debug(f"received bytes: {raw_msg}")
+        # Do not log raw native message bytes or full JSON payload: they may
+        # contain challenges, credential IDs, attestation objects, or
+        # authenticator data. Keep only structural framing logs.
         message = raw_msg.decode("utf-8")
-        logging.debug("received " + message)
         return json.loads(message)
     except Exception as e:
         logging.error("Failed to read message")
@@ -65,7 +70,10 @@ def sendMessage(encodedMessage):
     sys.stdout.buffer.write(encodedMessage["length"])
     sys.stdout.buffer.write(encodedMessage["content"])
     sys.stdout.buffer.flush()
-    logging.debug(f"sent message: {encodedMessage}")
+    # Do not log the encoded message: responses may contain attestation
+    # objects, authenticator data, or credential IDs. Log only structural
+    # framing (response length).
+    logging.debug(f"sent response: {len(encodedMessage['content'])} bytes")
 
 
 def b64_encode(data: bytes) -> str:
@@ -354,7 +362,7 @@ class AuthenticatorData:
 async def create_passkey(interface, options, origin, top_origin):
     logging.debug("Creating passkey")
     req_json = json.dumps(options)
-    logging.debug(req_json)
+    # Do not log req_json: it may contain challenges or credential IDs.
     request_event = create_portal_request_message_handler(interface.bus)
     req = {
         "handle_token": Variant("s", request_event.token),
@@ -390,7 +398,7 @@ async def get_passkey(interface, options, origin, top_origin):
     logging.debug("Authenticating with passkey")
     is_same_origin = origin == top_origin
     req_json = json.dumps(options)
-    logging.debug(req_json)
+    # Do not log req_json: it may contain challenges or credential IDs.
     req = {
         "type": Variant("s", "publicKey"),
         "origin": Variant("s", origin),
@@ -431,7 +439,7 @@ async def get_interface():
     logging.info(os.getcwd())
 
     msg = Message(
-        "org.freedesktop.portal.Desktop",
+        PORTAL_BUS_NAME,
         "/org/freedesktop/portal/desktop",
         "org.freedesktop.host.portal.Registry",
         "Register",
@@ -447,7 +455,7 @@ async def get_interface():
         introspection = f.read()
 
     proxy_object = bus.get_proxy_object(
-        "org.freedesktop.portal.Desktop",
+        PORTAL_BUS_NAME,
         "/org/freedesktop/portal/desktop",
         introspection,
     )
@@ -460,7 +468,7 @@ async def get_interface():
 
 
 async def run(cmd, options, origin, top_origin):
-    logging.debug("Executing command")
+    logging.debug(f"Executing command: {cmd}")
     interface = await get_interface()
 
     if cmd == "create":

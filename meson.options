@@ -22,3 +22,9 @@ option(
   value: false,
   description: 'Whether to perform an offline build with Cargo. Defaults to false to download crates from registries.',
 )
+option(
+  'firefox_portal_bus_name',
+  type: 'string',
+  value: 'org.freedesktop.portal.Desktop',
+  description: 'D-Bus well-known name the Firefox Native Messaging shim targets for the Credential Portal frontend. Default reproduces upstream. Set to the sidecar identity (e.g. io.github.PLFJY.CredentialPortal) for the sidecar build.',
+)
