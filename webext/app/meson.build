@@ -6,7 +6,7 @@ addon_app_config.set(
   datadir / 'credentialsd' / 'xyz.iinuwa.credentialsd.Credentials.xml',
 )
 
-addon_app_config.set('APP_ID', 'org.mozilla.firefox')
+addon_app_config.set('APP_ID', 'firefox')
 # Build-time D-Bus destination for the Credential Portal frontend.
 # Default reproduces upstream (org.freedesktop.portal.Desktop); the sidecar
 # build overrides this to the sidecar identity. The shim must not accept this
