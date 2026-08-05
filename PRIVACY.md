@@ -2,10 +2,10 @@
 
 This notice covers the Firefox sidecar extension distributed from this
 repository as `credentialsd-sidecar-firefox-VERSION.xpi` (extension ID
-`credentialsd-sidecar@plfjy.top`). It does not cover the credentialsd daemon,
-the credentialsd UI, the Credential Portal sidecar frontend, or any other
-component shipped by the Arch package; those components have their own behavior
-described in their respective sources.
+`credentialsd-firefox-sidecar@plfjy.top`). It does not cover the credentialsd
+daemon, the credentialsd UI, the Credential Portal sidecar frontend, or any
+other component shipped by the Arch package; those components have their own
+behavior described in their respective sources.
 
 ## What the extension does
 
@@ -13,8 +13,8 @@ The extension intercepts WebAuthn `navigator.credentials.create()` and
 `navigator.credentials.get()` operations on HTTPS pages. When a page calls one
 of those APIs, the extension forwards the website origin and the WebAuthn
 request and response data to the locally installed `credentialsd-firefox-helper`
-Native Messaging host. The Native Messaging host forwards the data over D-Bus to
-the locally installed credentialsd daemon and the Credential Portal sidecar
+Native Messaging host. The Native Messaging host forwards the data over D-Bus
+to the locally installed credentialsd daemon and the Credential Portal sidecar
 frontend, which process the WebAuthn ceremony on the user's device.
 
 All WebAuthn request and response processing occurs locally on the user's
@@ -77,16 +77,17 @@ Uninstalling the Firefox extension stops browser integration. After
 uninstallation, the extension no longer intercepts WebAuthn operations and no
 longer communicates with the Native Messaging host.
 
-Uninstalling the Firefox extension does not automatically uninstall credentialsd
-or the Credential Portal sidecar. The daemon, the UI, the sidecar frontend, the
-systemd user units, the D-Bus service files, and the Native Messaging manifest
-remain installed on the system until they are removed through the system package
-manager.
+Uninstalling the Firefox extension does not automatically uninstall
+credentialsd or the Credential Portal sidecar. The daemon, the UI, the sidecar
+frontend, the systemd user units, the D-Bus service files, and the Native
+Messaging manifest remain installed on the system until they are removed
+through the system package manager.
 
-Uninstalling the Arch package does not automatically remove an already installed
-Firefox extension. Firefox extensions are managed by Firefox; the Arch package
-only installs the native Linux integration. Once a signed XPI has been installed
-into a Firefox profile, removing the Arch package does not uninstall that XPI.
+Uninstalling the Arch package does not automatically remove an already
+installed Firefox extension. Firefox extensions are managed by Firefox; the
+Arch package only installs the native Linux integration. Once a signed XPI has
+been installed into a Firefox profile, removing the Arch package does not
+uninstall that XPI.
 
 ## Scope of this notice
 
