@@ -1,0 +1,132 @@
+# Maintainer: PLFJY <plfjy@localhost>
+#
+# All-in-one Firefox Hybrid QR Passkey sidecar package.
+#
+# Builds from two GitHub forks:
+#   - PLFJY/credentialsd (integration/credential-portal-sidecar branch)
+#   - PLFJY/xdg-desktop-portal (sidecar/credential-portal branch)
+#
+# Installs:
+#   - credentialsd daemon + UI + D-Bus services + systemd units
+#   - credentials-portal-sidecar frontend (io.github.PLFJY.CredentialPortal)
+#   - Firefox Native Messaging shim + manifest
+#   - UNSIGNED credentialsd-firefox-helper.xpi (user must sign via AMO)
+#
+# The XPI is installed to /usr/share/credentialsd/credentialsd-firefox-helper.xpi
+# and is UNSIGNED. To install permanently in Firefox, sign it with:
+#
+#   web-ext sign --source-dir <extension-dir> --api-key KEY --api-secret SECRET --channel unlisted
+#
+# Or load it temporarily via about:debugging.
+#
+# Post-install checklist:
+#   1. systemctl --user daemon-reload
+#   2. systemctl --user start credentials-portal-sidecar.service
+#   3. systemctl --user start xyz.iinuwa.credentialsd.UiControl.service
+#   4. Load the XPI in Firefox (about:debugging or signed install)
+#   5. Verify: gdbus introspect --session --dest io.github.PLFJY.CredentialPortal \
+#        --object-path /org/freedesktop/portal/desktop | grep credential
+
+pkgname=credentialsd-firefox-sidecar-git
+pkgver=r1
+pkgrel=1
+pkgdesc='All-in-one Firefox Hybrid QR Passkey sidecar: credentialsd + portal sidecar + unsigned XPI'
+arch=('x86_64')
+url='https://github.com/PLFJY/credentialsd'
+license=('LGPL-3.0-only' 'LGPL-2.1-or-later')
+# Disable LTO: makepkg's default OPTIONS=(lto) appends -flto=auto to CFLAGS,
+# which causes ring's C/asm objects to fail linking under rust-lld.
+options=(!lto)
+
+depends=(
+  'dbus'
+  'glib2'
+  'gtk4'
+  'openssl'
+  'systemd-libs'
+  'pcsclite'
+  'libnfc'
+  'hidapi'
+  'hicolor-icon-theme'
+  'json-glib'
+  'fuse3'
+  'gdk-pixbuf2'
+  'gst-plugins-base-libs'
+  'libpipewire'
+  'libwireplumber'
+  'libdex'
+  'geoclue'
+  'systemd'
+  'python-dbus-next'
+)
+
+makedepends=(
+  'meson'
+  'ninja'
+  'rust'
+  'git'
+  'cargo'
+  'zip'
+  'pkgconf'
+  'gettext'
+)
+
+source=(
+  "credentialsd::git+https://github.com/PLFJY/credentialsd.git#branch=integration/credential-portal-sidecar"
+  "xdg-desktop-portal::git+https://github.com/PLFJY/xdg-desktop-portal.git#branch=sidecar/credential-portal"
+)
+sha256sums=('SKIP' 'SKIP')
+
+pkgver() {
+  cd "$srcdir/credentialsd"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  # --- Build xdg-desktop-portal sidecar frontend ---
+  cd "$srcdir/xdg-desktop-portal"
+  meson setup build --prefix=/usr \
+    --libexecdir=/usr/lib \
+    -Dportal_bus_name=io.github.PLFJY.CredentialPortal \
+    -Dportal_binary_name=credentials-portal-sidecar \
+    -Dportal_systemd_unit_name=credentials-portal-sidecar.service \
+    -Dportal_dbus_service_name=io.github.PLFJY.CredentialPortal.service \
+    -Dsidecar_install=true \
+    -Dgeoclue=enabled \
+    -Dgudev=disabled \
+    -Dflatpak-interfaces=disabled \
+    -Dsystemd=enabled \
+    -Dtests=disabled \
+    -Ddocumentation=disabled \
+    -Dman-pages=disabled
+  ninja -C build
+
+  # --- Build credentialsd with sidecar-targeted webextension ---
+  cd "$srcdir/credentialsd"
+  meson setup build --prefix=/usr \
+    -Dprofile=default \
+    -Dfirefox_portal_bus_name=io.github.PLFJY.CredentialPortal \
+    -Dcargo_locked=true \
+    -Dcargo_lto=false
+  ninja -C build
+}
+
+package() {
+  # Install xdg-desktop-portal sidecar frontend
+  cd "$srcdir/xdg-desktop-portal"
+  meson install -C build --destdir="$pkgdir"
+
+  # Install credentialsd (daemon + UI + webext + XPI + portal config)
+  cd "$srcdir/credentialsd"
+  meson install -C build --destdir="$pkgdir"
+
+  # Licenses
+  install -Dm644 "$srcdir/credentialsd/LICENSE.md" \
+    "$pkgdir/usr/share/licenses/$pkgname/credentialsd-LICENSE.md"
+  install -Dm644 "$srcdir/xdg-desktop-portal/LICENSES/LGPL-2.1-or-later.txt" \
+    "$pkgdir/usr/share/licenses/$pkgname/xdg-desktop-portal-LGPL-2.1.txt"
+
+  # Note: The XPI at /usr/share/credentialsd/credentialsd-firefox-helper.xpi
+  # is UNSIGNED. Users must sign it via AMO (web-ext sign) or load it
+  # temporarily via about:debugging.
+}
