@@ -11,6 +11,10 @@
 #   4. sidecar dbus service: Name, Exec, SystemdService differ from distro
 #   5. sidecar unit has XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=credential; distro does not
 #   6. --replace safety: sidecar BusName != standard BusName (static guarantee)
+#   7. credentialsd install plan ships the desktop-agnostic sidecar portal
+#      config (credentials-sidecar-portals.conf) and the sidecar unit drop-in
+#      that pins XDG_CURRENT_DESKTOP=credentials-sidecar; the distro unit must
+#      NOT carry that override (only the sidecar process is affected)
 #
 # This script does NOT start any system services or touch the real session bus.
 
@@ -59,6 +63,38 @@ else
   bad "credentialsd overlaps distro packages: xdp=[${OVERLAP_CRED_XDP}] hyprland=[${OVERLAP_CRED_HYPRLAND}]"
 fi
 
+# --- 2b. desktop-agnostic sidecar portal config + unit drop-in ---
+# The credentialsd install plan must ship the dedicated sidecar frontend
+# config (credentials-sidecar-portals.conf) and the sidecar unit drop-in that
+# pins XDG_CURRENT_DESKTOP=credentials-sidecar. These paths are unique and must
+# not overlap any desktop-specific *-portals.conf or the distro portal unit.
+SIDECAR_PORTALS_CONF="/usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf"
+SIDECAR_DROPIN="/usr/lib/systemd/user/credentials-portal-sidecar.service.d/credentials-sidecar.conf"
+
+if printf '%s\n' "$CREDENTIALSD_FILES" | grep -qxF "$SIDECAR_PORTALS_CONF"; then
+  ok "credentialsd install plan ships $SIDECAR_PORTALS_CONF"
+else
+  bad "credentialsd install plan missing $SIDECAR_PORTALS_CONF"
+fi
+
+if printf '%s\n' "$CREDENTIALSD_FILES" | grep -qxF "$SIDECAR_DROPIN"; then
+  ok "credentialsd install plan ships sidecar drop-in $SIDECAR_DROPIN"
+else
+  bad "credentialsd install plan missing sidecar drop-in $SIDECAR_DROPIN"
+fi
+
+# No desktop-specific *-portals.conf may be installed by the credentialsd plan.
+for forbidden_conf in \
+    /usr/share/xdg-desktop-portal/gnome-portals.conf \
+    /usr/share/xdg-desktop-portal/kde-portals.conf \
+    /usr/share/xdg-desktop-portal/hyprland-portals.conf \
+    /usr/share/xdg-desktop-portal/portals.conf; do
+  if printf '%s\n' "$CREDENTIALSD_FILES" | grep -qxF "$forbidden_conf"; then
+    bad "credentialsd install plan must not install/overwrite $forbidden_conf"
+  fi
+done
+ok "credentialsd install plan installs no desktop-specific *-portals.conf"
+
 # --- 3. sidecar systemd unit independence ---
 SIDECAR_UNIT="$XDP_SIDECAR_ROOT/usr/local/lib/systemd/user/credentials-portal-sidecar.service"
 DISTRO_UNIT="/usr/lib/systemd/user/xdg-desktop-portal.service"
@@ -91,6 +127,15 @@ if [ -f "$SIDECAR_UNIT" ] && [ -f "$DISTRO_UNIT" ]; then
     bad "distro unit unexpectedly enables experimental interface"
   else
     ok "distro unit does not enable experimental interface"
+  fi
+
+  # The XDG_CURRENT_DESKTOP=credentials-sidecar override is delivered by the
+  # credentialsd-provided drop-in (credentials-portal-sidecar.service.d/), so
+  # the distro unit must NOT carry it (only the sidecar process is affected).
+  if grep -q 'XDG_CURRENT_DESKTOP=credentials-sidecar' "$DISTRO_UNIT"; then
+    bad "distro unit unexpectedly carries sidecar XDG_CURRENT_DESKTOP override"
+  else
+    ok "distro unit does not carry sidecar XDG_CURRENT_DESKTOP override"
   fi
 else
   bad "missing unit file(s): sidecar=$SIDECAR_UNIT distro=$DISTRO_UNIT"
