@@ -39,6 +39,10 @@ else
 endif
 
 cargo_env = ['CARGO_HOME=' + cargo_home]
+# See credentialsd/src/meson.build: hidapi static archive unresolved under LTO.
+if get_option('profile') == 'default'
+  cargo_env += 'CARGO_PROFILE_RELEASE_LTO=' + (get_option('cargo_lto') ? 'true' : 'false')
+endif
 
 custom_target(
   'credentialsd-ui',
