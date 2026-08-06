@@ -10,7 +10,7 @@ use tokio_stream::StreamExt;
 use zbus::{
     Connection, MatchRule, MessageStream,
     fdo::{self, DBusProxy},
-    names::OwnedUniqueName,
+    names::{OwnedUniqueName, WellKnownName},
     proxy,
     zvariant::{ObjectPath, Optional, OwnedFd, OwnedObjectPath},
 };
@@ -375,8 +375,21 @@ impl UiController for UiControlServiceClient {
         let (from_ui_tx, from_ui_rx) = mpsc::channel(32);
         let backend_proxy = UiControlServiceProxy::new(&self.conn).await?;
         let dbus_proxy = DBusProxy::new(&self.conn).await?;
+
+        // Explicitly activate the UiControl service via D-Bus service
+        // activation. The get_name_owner() call below does NOT trigger
+        // activation — only a method call on the service itself does — so
+        // without this the request fails with NameHasNoOwner when the
+        // UiControl service is not already running.
+        let service_name: WellKnownName<'_> = "xyz.iinuwa.credentialsd.UiControl"
+            .try_into()
+            .map_err(|e| format!("Invalid UiControl service name: {e}"))?;
+        dbus_proxy
+            .start_service_by_name(service_name.clone(), 0)
+            .await?;
+
         let sender = dbus_proxy
-            .get_name_owner(backend_proxy.as_ref().destination().clone())
+            .get_name_owner(service_name.into())
             .await?;
         subscribe_ui_events(
             self.conn.clone(),
@@ -386,8 +399,14 @@ impl UiController for UiControlServiceClient {
         )
         .await?;
 
-        backend_proxy
-            .create_session(
+        // The CreateSession D-Bus call may hang if the UiControl service
+        // was just activated and its GTK main loop is not yet ready to
+        // process requests. Wrap it in a timeout so that a stuck call
+        // does not hold the gateway mutex indefinitely, which would
+        // block all subsequent credential requests.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            backend_proxy.create_session(
                 session_handle.as_ref(),
                 parent_window.into(),
                 origin,
@@ -396,8 +415,12 @@ impl UiController for UiControlServiceClient {
                 app_id,
                 app_pid,
                 options,
-            )
-            .await?;
+            ),
+        )
+        .await
+        .map_err(|_| {
+            format!("Timeout waiting for UiControl to respond to CreateSession")
+        })??;
         tracing::debug!(path = ?session_handle, "Session initialized");
         Ok(Ceremony {
             proxy: Arc::new(backend_proxy),

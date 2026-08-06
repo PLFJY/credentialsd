@@ -274,6 +274,7 @@ async fn should_trust_app_id(pid: u32) -> bool {
             PathBuf::from("/usr/libexec/xdg-desktop-portal"),
             PathBuf::from("/usr/local/lib/xdg-desktop-portal"),
             PathBuf::from("/usr/local/libexec/xdg-desktop-portal"),
+            PathBuf::from("/usr/lib/credentials-portal-sidecar"),
         ]
     };
     tracing::debug!(
