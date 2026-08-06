@@ -2,13 +2,13 @@
     "description": "Helper to integrate credentialsd with the browser",
     "manifest_version": 3,
     "name": "credentialsd-helper",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "icons": {
         "48": "icons/logo.svg"
     },
     "browser_specific_settings": {
         "gecko": {
-            "id": "credentialsd-sidecar@plfjy.top",
+            "id": "credentialsd-firefox-sidecar@plfjy.top",
             "strict_min_version": "140.0",
             "update_url": "https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json",
             "data_collection_permissions": {

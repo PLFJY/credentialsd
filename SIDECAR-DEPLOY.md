@@ -1,117 +1,87 @@
 # Credential Portal Sidecar 部署指南
 
-本文档描述如何在 Arch Linux 上部署 Firefox Hybrid QR Passkey 方案。该方案与
-桌面环境无关，支持 GNOME、KDE Plasma、Hyprland、sway 等任何具备可用图形
-D-Bus 会话与 systemd 用户服务的桌面环境。
+本文档描述如何在 Arch Linux 上部署 Firefox Hybrid QR Passkey 方案。运行时架构与桌面环境无关，可用于 GNOME、KDE Plasma、Hyprland、Sway 等具备用户 D-Bus 与 systemd user service 的图形会话。
 
 ## 架构
 
-```
-Firefox WebExtension → Native Messaging shim → io.github.PLFJY.CredentialPortal (sidecar)
-→ Credential Portal frontend → credentialsd daemon/UI → Hybrid QR → 手机 Passkey
+```text
+Firefox WebExtension
+→ Native Messaging host
+→ io.github.PLFJY.CredentialPortal
+→ Credential Portal sidecar frontend
+→ credentialsd daemon/UI
+→ Hybrid QR
+→ 手机 Passkey
 ```
 
-系统级 `org.freedesktop.portal.Desktop` 及其各桌面自带的后端配置不受影响。
+标准的 `org.freedesktop.portal.Desktop`、桌面环境原有的 Portal backend 以及 FileChooser、ScreenCast、Screenshot 等接口不受影响。
 
 ## 前置条件
 
 - Arch Linux
-- Firefox 140+ (原生包，非 Snap/Flatpak)
-- 具有用户 D-Bus 与 systemd 用户服务的图形桌面会话（GNOME、KDE Plasma、Hyprland、sway 等均可；Hyprland 仅为已测试环境之一，非架构要求）
-- Rust toolchain (stable)
-- meson >= 1.5, ninja, pkg-config
+- Firefox 140+ 原生包
+- 用户 D-Bus 会话
+- systemd user service
+- Rust、Cargo、Meson 与 Ninja
 
-## 依赖安装
+推荐使用仓库提供的 all-in-one PKGBUILD，而不是分别手工安装两个项目。
 
-```sh
-sudo pacman -S --needed rust cargo meson ninja gtk4 dbus python-dbus-next \
-  libwebauthn hidapi systemd libdex json-glib glib2 pipewire geoclue \
-  gdk-pixbuf2 python-pytest python-dbusmock
-```
-
-## 构建与安装
-
-### 1. xdg-desktop-portal (sidecar 前端)
+## 安装 Linux 端
 
 ```sh
-cd xdg-desktop-portal
-meson setup --prefix=/usr \
-  -Dsidecar_install=true \
-  -Dportal_bus_name=io.github.PLFJY.CredentialPortal \
-  -Dportal_binary_name=credentials-portal-sidecar \
-  -Dportal_systemd_unit_name=credentials-portal-sidecar.service \
-  -Dportal_dbus_service_name=io.github.PLFJY.CredentialPortal.service \
-  build
-ninja -C build
-sudo ninja -C build install
+git clone https://github.com/PLFJY/credentialsd.git
+cd credentialsd/packaging/credentialsd-firefox-sidecar-git
+makepkg -si
 ```
 
-### 2. credentialsd (守护进程 + UI + 扩展)
+该包安装：
 
-```sh
-cd credentialsd-sidecar
-meson setup --prefix=/usr \
-  -Dprofile=default \
-  -Dfirefox_portal_bus_name=io.github.PLFJY.CredentialPortal \
-  -Dcargo_locked=true \
-  build
-ninja -C build
-sudo ninja -C build install
+- credentialsd daemon 与 UI
+- Credential Portal sidecar frontend
+- systemd user units
+- D-Bus activation files
+- Firefox Native Messaging executable
+- Firefox Native Messaging manifest
+
+该包**不会**安装 Firefox 扩展，也不会把 unsigned XPI 放进 `/usr`。
+
+## Portal backend 选择
+
+sidecar 使用内部 Desktop ID：
+
+```text
+credentials-sidecar
 ```
 
-## 配置
+systemd drop-in 只覆盖 sidecar 进程：
 
-### Portal 后端选择（桌面环境无关）
+```ini
+[Service]
+Environment=XDG_CURRENT_DESKTOP=credentials-sidecar
+Environment=XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=credential
+```
 
-后端选择不依赖用户的真实桌面环境。Credential Portal sidecar 通过自身独立的
-桌面标识 `credentials-sidecar` 进行后端选择，与系统级
-`org.freedesktop.portal.Desktop` 完全隔离。
+sidecar 使用独立配置：
 
-具体机制：
+```text
+/usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf
+```
 
-1. sidecar 的 systemd 用户单元通过 drop-in
-   `/usr/lib/systemd/user/credentials-portal-sidecar.service.d/credentials-sidecar.conf`
-   仅覆盖 sidecar 进程自身的环境：
+内容：
 
-   ```ini
-   [Service]
-   Environment=XDG_CURRENT_DESKTOP=credentials-sidecar
-   Environment=XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=credential
-   ```
+```ini
+[preferred]
+default=none
+org.freedesktop.impl.portal.experimental.Credential=credentialsd
+```
 
-   该 override 只影响 sidecar 进程，不修改标准 `xdg-desktop-portal.service`，
-   也不触碰用户真实的桌面会话环境或全局 `XDG_CURRENT_DESKTOP`。
+`credentialsd.portal` 中的：
 
-2. 与之配套的前端配置
-   `/usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf`
-   （文件名与 `XDG_CURRENT_DESKTOP` 的小写值一致）只对 sidecar 生效：
+```ini
+UseIn=credentials-sidecar;
+```
 
-   ```ini
-   [preferred]
-   default=none
-   org.freedesktop.impl.portal.experimental.Credential=credentialsd
-   ```
-
-   除 Credential 接口外，其余后端接口在 sidecar 中均解析为 `none`。
-
-3. `credentialsd.portal` 的 `UseIn=credentials-sidecar;` 仅作为遗留兜底，
-   不再枚举任何真实桌面环境（如 GNOME/KDE/Hyprland/sway）。
-
-正常情况下**无需**用户创建 `~/.config/xdg-desktop-portal/portals.conf`。该方案
-不会安装或修改任何桌面自带的 `gnome-portals.conf`、`kde-portals.conf`、
-`hyprland-portals.conf` 或通用 `portals.conf`，也不会写入用户家目录。
-
-标准 Portal 仍然使用用户真实的 `XDG_CURRENT_DESKTOP` 及其桌面自带配置，
-FileChooser、ScreenCast、Screenshot、Settings、OpenURI、RemoteDesktop、
-GlobalShortcuts 等接口的后端选择不受影响。
-
-### App ID
-
-shim 中的 `APP_ID` 已在构建时通过 meson 配置为 `firefox`（对应 `/usr/share/applications/firefox.desktop`）。
-
-### Trusted Caller
-
-credentialsd 守护进程验证调用者 PID 的可执行文件路径。`/usr/lib/credentials-portal-sidecar` 已在 `credentialsd/src/gateway/mod.rs` 的 trusted_caller_paths 中。
+仅作为兼容性 fallback。用户通常不需要创建 `~/.config/xdg-desktop-portal/portals.conf`。
 
 ## 启动服务
 
@@ -121,224 +91,166 @@ systemctl --user start credentials-portal-sidecar.service
 systemctl --user start xyz.iinuwa.credentialsd.UiControl.service
 ```
 
-credentialsd 守护进程 (`xyz.iinuwa.credentialsd.Credentials.service`) 会在首次请求时由 D-Bus 自动激活。
+credentialsd daemon 会在第一次请求时通过 D-Bus 自动激活。
 
-## 加载 Firefox 扩展
+## 安装 Firefox 扩展
 
-### 正式安装（用户）
+正式版本使用 Mozilla AMO 的 unlisted signing，并通过 GitHub Releases 自行分发：
 
-正式安装使用 Mozilla AMO 未上架签名（unlisted）的 XPI，该 XPI 仅通过 GitHub Releases 分发：
-
-1. 下载最新 Release 的签名 XPI：
-   `https://github.com/PLFJY/credentialsd/releases/latest`
-2. Firefox → `about:addons`
-3. 齿轮菜单 → **Install Add-on From File…**
-4. 选择下载的签名 XPI
-
-`makepkg -si` 不会安装 Firefox 扩展，只安装 Linux 端的原生集成。
-
-### 临时加载（仅开发用）
-
-仅用于开发/测试。Meson 构建会在构建目录生成未签名的 XPI，可临时加载；该 XPI 不会安装到 `/usr`，Firefox 重启后失效。
-
-1. 构建：`ninja -C build`
-2. 定位未签名 XPI（典型路径）：`build/webext/add-on/credentialsd-firefox-helper.xpi`
-3. Firefox → `about:debugging#/runtime/this-firefox`
-4. 点击 "Load Temporary Add-on..."
-5. 选择构建目录中的未签名 XPI
-
-未签名 XPI 不得用于正式安装，也不会出现在 GitHub Release 中。
-
-## 维护者设置
-
-要发布 Firefox 扩展，维护者需要：
-
-- Mozilla 开发者账号（https://addons.mozilla.org/developers/）
-- AMO API 凭据（JWT Issuer + JWT Secret），从 AMO Developer Hub 申请
-- GitHub Environment：`amo-signing`
-  - Environment Secret：`AMO_JWT_ISSUER`
-  - Environment Secret：`AMO_JWT_SECRET`
-- 可选：为 `amo-signing` 环境配置 required reviewer
-
-凭据值不得提交到仓库、写入工作流命令文本、打印到日志、发送到 artifacts，或暴露给 pull request。工作流仅通过步骤环境变量读取：
-
-```yaml
-env:
-  AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-  AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+```text
+https://github.com/PLFJY/credentialsd/releases/latest
 ```
 
-示例凭据值不得出现在仓库中。
+安装步骤：
+
+1. 下载 Release 中 Mozilla-signed XPI。
+2. 打开 `about:addons`。
+3. 点击齿轮菜单。
+4. 选择 **Install Add-on From File…**。
+5. 选择下载的 XPI。
+
+当前永久 Extension ID：
+
+```text
+credentialsd-firefox-sidecar@plfjy.top
+```
+
+Native Messaging manifest 的 `allowed_extensions` 必须与该 ID 完全一致。
+
+## 开发时临时加载
+
+Meson 可以继续生成 unsigned XPI，但它只作为 build artifact 使用，不安装到 `/usr`，也不上传到正式 Release。
+
+```sh
+ninja -C build
+```
+
+然后打开：
+
+```text
+about:debugging#/runtime/this-firefox
+```
+
+选择 **Load Temporary Add-on…**，加载 build directory 中的 XPI 或准备好的 `manifest.json`。临时扩展会在 Firefox 重启后失效。
 
 ## 发布 Firefox 版本
 
-1. 更新 `webext/add-on/manifest.firefox.json` 中的 `version`
-2. 本地校验：
-   ```sh
-   python3 scripts/prepare-firefox-extension.py /tmp/credentialsd-ext-prep
-   python3 tests/test_release_manifest_invariants.py
-   python3 tests/test_release_id_consistency.py
-   python3 tests/test_prepare_extension.py /tmp/credentialsd-ext-prep
-   python3 tests/test_update_manifest_generator.py
-   python3 tests/test_packaging_policy.py
-   python3 tests/test_workflow_security.py
-   python3 tests/test_release_no_secrets.py
-   python3 tests/test_release_retired_ids.py
-   python3 tests/test_signed_xpi_structure.py
-   ```
-3. 将改动合并到默认分支
-4. 打开 GitHub Actions
-5. 选择 **Release Firefox Extension** workflow
-6. 设置 `publish=true` 触发发布
-7. 审批 `amo-signing` Environment 部署（如配置了 required reviewer）
-8. 等待 AMO 签名完成
-9. 校验 GitHub Release：tag `firefox-v<VERSION>`，包含 4 个资产：
-   - `credentialsd-sidecar-firefox-<VERSION>.xpi`（Mozilla 签名的新 XPI）
-   - `updates.json`
-   - `SHA256SUMS`
-   - `release-metadata.json`
-10. 下载签名 XPI 安装到 Firefox，在 https://webauthn.io 测试 create/get
+维护者需要在 GitHub Environment `amo-signing` 中配置：
 
-工作流不会在 push、pull request 或任意 tag 上自动发布。每次发布都使用新版本号，不得复用已存在的 AMO 版本或 Git tag。
+```text
+AMO_JWT_ISSUER
+AMO_JWT_SECRET
+```
+
+凭据来自 Mozilla Add-ons Developer Hub 的 API credentials。不要把真实值提交到仓库、文档、日志或 workflow artifact。
+
+发布步骤：
+
+1. 修改 `webext/add-on/manifest.firefox.json` 中的 `version`。
+2. 合并到默认分支。
+3. 打开 GitHub Actions。
+4. 运行 **Release Firefox Extension**。
+5. 设置 `publish=true`。
+6. 如配置了 Environment reviewer，批准 `amo-signing` deployment。
+7. 等待 AMO unlisted signing 与 GitHub Release 创建完成。
+
+版本会生成：
+
+```text
+Tag: firefox-v<VERSION>
+XPI: credentialsd-sidecar-firefox-<VERSION>.xpi
+```
+
+Release 应包含：
+
+- Mozilla-signed XPI
+- `updates.json`
+- `SHA256SUMS`
+- `release-metadata.json`
+
+Release 必须是普通 Release，不能是 draft 或 prerelease。
 
 ## 自动更新
 
-Firefox 通过扩展 manifest 中声明的 `update_url` 周期性拉取更新清单：
+Firefox manifest 中的固定更新地址：
 
-```
+```text
 https://github.com/PLFJY/credentialsd/releases/latest/download/updates.json
 ```
 
-`updates.json` 中的 `update_link` 使用精确版本化的 Release 资产 URL：
+`updates.json` 再指向精确版本的 XPI：
 
-```
+```text
 https://github.com/PLFJY/credentialsd/releases/download/firefox-v<VERSION>/credentialsd-sidecar-firefox-<VERSION>.xpi
 ```
 
-只有 `updates.json` 这个 URL 是 `releases/latest` 形式；XPI 本身始终指向精确版本。
-
-Firefox 更新 Release 必须是普通 Release：
-
-- 不是 draft
-- 不是 prerelease
-
-否则 Firefox 不会从 `updates.json` 拉取到该版本。
-
-## 用户安装
-
-1. Clone `PLFJY/credentialsd`
-2. 进入 `packaging/credentialsd-firefox-sidecar-git`
-3. 运行 `makepkg -si`
-4. 重启/启动 user services
-5. 从最新 GitHub Release 下载 Mozilla 签名的 XPI
-6. 打开 `about:addons`
-7. 选择 **Install Add-on From File…**
-8. 选择下载的签名 XPI
-9. 在 https://webauthn.io 测试 create/get
-
-`makepkg -si` 不会安装 Firefox 扩展，只安装 Linux 端的原生集成。
-
-## 开发者临时加载
-
-未签名构建产物仅用于开发：
-
-- 仅开发使用
-- 通过 `about:debugging` 临时加载
-- Firefox 重启后失效
-- 不会安装到 `/usr`
-
-临时加载说明不得与正式用户安装说明混用。
+只有 `updates.json` 使用 `releases/latest`；XPI 必须使用不可变的 versioned URL 和 SHA-256。
 
 ## 验证
 
+检查服务：
+
 ```sh
-# 检查 sidecar 是否运行
 systemctl --user status credentials-portal-sidecar.service
-
-# 检查 Credential 接口是否注册
-gdbus introspect --session --dest io.github.PLFJY.CredentialPortal \
-  --object-path /org/freedesktop/portal/desktop 2>&1 | grep credential
-
-# 检查 credentialsd-ui 是否运行
 systemctl --user status xyz.iinuwa.credentialsd.UiControl.service
-
-# 测试 Passkey
-# 打开 https://webauthn.io → Register → 扫码完成
 ```
 
-## 网站覆盖范围
-
-扩展 manifest 的 content_scripts 匹配 `https://*/*`，支持所有 HTTPS 网站。origin 验证由 credentialsd 守护进程执行，不依赖扩展的 matches。
-
-## 修改的源文件
-
-| 文件 | 改动 |
-|------|------|
-| `credentialsd/src/gateway/mod.rs` | 添加 `/usr/lib/credentials-portal-sidecar` 到 trusted_caller_paths |
-| `webext/app/meson.build` | APP_ID 从 `org.mozilla.firefox` 改为 `firefox` |
-| `webext/add-on/manifest.firefox.json` | matches 从特定网站改为 `https://*/*` |
-| `portal/credentialsd.portal` | `UseIn` 改为 `credentials-sidecar;`（仅遗留兜底，不再枚举真实桌面） |
-| `portal/credentials-sidecar-portals.conf` | 新增 sidecar 专用前端配置（`default=none` + Credential=credentialsd） |
-| `systemd/credentials-portal-sidecar.service.d/credentials-sidecar.conf` | 新增 sidecar 单元 drop-in，仅覆盖 sidecar 自身 `XDG_CURRENT_DESKTOP=credentials-sidecar` |
-| `meson.options` | 新增 `firefox_portal_bus_name` 选项 |
-| `xdg-desktop-portal` meson 选项 | 新增 sidecar 安装支持 |
-
-## 上游同步
-
-1. 拉取上游更改
-2. 冲突概率低 — 所有改动都是新增 option/路径，不修改既有逻辑
-3. 同步后重新构建安装即可
-
-## 清理
+检查 sidecar Credential interface：
 
 ```sh
-# 清理构建目录
-rm -rf credentialsd-sidecar/build xdg-desktop-portal/build
-
-# 清理临时文件
-rm -f /tmp/credential_manager_shim.log
-rm -rf /tmp/credentialsd-ext
+gdbus introspect --session --dest io.github.PLFJY.CredentialPortal --object-path /org/freedesktop/portal/desktop | grep Credential
 ```
 
-## 排障
-
-### Credential 接口未注册
-
-检查 sidecar 是否使用独立桌面标识 `credentials-sidecar`（应由 drop-in 覆盖，
-不依赖真实桌面）：
+检查标准 Portal 仍独立运行：
 
 ```sh
-systemctl --user show credentials-portal-sidecar.service -p Environment
-# 应包含 XDG_CURRENT_DESKTOP=credentials-sidecar
-# 以及 XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=credential
+busctl --user status org.freedesktop.portal.Desktop
+busctl --user status io.github.PLFJY.CredentialPortal
 ```
 
-检查 sidecar 专用前端配置是否存在且只选择 Credential：
-
-```sh
-cat /usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf
-cat /usr/share/xdg-desktop-portal/portals/credentialsd.portal
-# credentialsd.portal 的 UseIn 应为 credentials-sidecar;（不再是 Hyprland;）
-```
-
-### SecurityError: no description
-
-检查 credentialsd 日志：
-
-```sh
-journalctl --user -u xyz.iinuwa.credentialsd.Credentials.service --no-pager -n 10
-```
-
-如果显示 "untrusted caller"，确认 `/usr/lib/credentials-portal-sidecar` 在 trusted_caller_paths 中。
-
-如果显示 "claimed_app_id 为空"，确认 shim 中的 APP_ID 是 `firefox`（不是 `org.mozilla.firefox`）。
-
-### Native Messaging 连接失败
-
-确认 manifest 存在且扩展 ID 匹配：
+检查 Native Messaging manifest：
 
 ```sh
 cat /usr/lib/mozilla/native-messaging-hosts/xyz.iinuwa.credentialsd_helper.json
 ```
 
-确认 `allowed_extensions` 包含 `credentialsd-sidecar@plfjy.top`。
+其中应包含：
+
+```json
+"allowed_extensions": ["credentialsd-firefox-sidecar@plfjy.top"]
+```
+
+最后打开 `https://webauthn.io`，测试 Register、Hybrid QR 扫码和 Get/Login。
+
+## 常见问题
+
+### Credential interface 未注册
+
+```sh
+systemctl --user show credentials-portal-sidecar.service -p Environment
+cat /usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf
+cat /usr/share/xdg-desktop-portal/portals/credentialsd.portal
+```
+
+确认 sidecar 环境中存在：
+
+```text
+XDG_CURRENT_DESKTOP=credentials-sidecar
+XDG_DESKTOP_PORTAL_ENABLE_EXPERIMENTAL=credential
+```
+
+### Native Messaging 连接失败
+
+确认浏览器扩展 ID 和 Native Messaging `allowed_extensions` 都是：
+
+```text
+credentialsd-firefox-sidecar@plfjy.top
+```
+
+### SecurityError 或 untrusted caller
+
+```sh
+journalctl --user -u xyz.iinuwa.credentialsd.Credentials.service --no-pager -n 50
+```
+
+确认 `/usr/lib/credentials-portal-sidecar` 位于 credentialsd 的 trusted caller list，且 shim 的 App ID 为 `firefox`。
