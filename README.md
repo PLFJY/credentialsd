@@ -47,17 +47,24 @@ credentialsd D-Bus service.
 
 Two browsers are supported from a single unified codebase:
 
-- **Firefox 140+** — Install the XPI from the [releases page][release-page] for
-  the corresponding version of `credentialsd-webextension` package that you
-  installed.
+- **Firefox 140+** — The Mozilla-signed XPI is distributed only through
+  [GitHub Releases](https://github.com/PLFJY/credentialsd/releases/latest).
+  Install the native-side Linux package first
+  (`packaging/credentialsd-firefox-sidecar-git`), then download the signed XPI
+  from the latest Release and install it via
+  `about:addons → gear menu → Install Add-on From File…`. `makepkg -si` does
+  not install the Firefox extension; it installs only the native Linux
+  integration. Runtime privacy details are in [PRIVACY.md](/PRIVACY.md).
 - **Edge/Chromium (Chrome 111+, Edge 111+)** — Load as an unpacked extension
   from `webext/add-on/` using the Chromium manifest. See
   [`webext/README.md`](/webext/README.md#for-development-edgechromium) for
   setup instructions.
 
-Currently, the extension only works for https://webauthn.io and
-https://demo.yubico.com, but can be used to test various WebAuthn options and
-hardware.
+The extension currently matches all HTTPS pages (`https://*/*`). Origin
+validation is performed by the credentialsd daemon and does not rely on the
+extension's match pattern. See
+[SIDECAR-DEPLOY.md](/SIDECAR-DEPLOY.md) for the full sidecar deployment,
+publishing, and automatic-update documentation.
 
 ### Experimental Firefox Build
 

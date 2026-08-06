@@ -46,9 +46,18 @@ couple of options:
 
 1. Follow the instructions in the ["For Installing/Testing" section of `BUILDING.md`](/BUILDING.md#for-installing-testing).
 2. Open Firefox and go to `about:debugging`.
-3. Click "This Firefox" > Load Temporary Extension. Select `/usr/local/share/credentialsd/credentialsd-firefox-helper.xpi`.
+3. Click "This Firefox" > Load Temporary Extension. Select the unsigned XPI
+   from your Meson build directory (typically
+   `build/webext/add-on/credentialsd-firefox-helper.xpi`). The unsigned XPI
+   is a development-only artifact and is never installed into `/usr` by the
+   Arch package.
 4. Navigate to [https://webauthn.io]().
 5. Run through the registration and creation process.
+
+For permanent installation, use the Mozilla-signed XPI distributed through
+[GitHub Releases](https://github.com/PLFJY/credentialsd/releases/latest).
+See [SIDECAR-DEPLOY.md](/SIDECAR-DEPLOY.md) and
+[PRIVACY.md](/PRIVACY.md) for details.
 
 ## For Development (Firefox)
 
