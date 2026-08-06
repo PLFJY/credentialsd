@@ -300,7 +300,17 @@ fn check_origin_from_app(
             "org.mozilla.firefox",
             "xyz.iinuwa.credentialsd.DemoCredentialsUi",
         ];
-        let mut privileged = trusted_clients.contains(&app_id.as_ref());
+        // Fallback: Arch Linux packages Firefox with the desktop file name
+        // "firefox" instead of the upstream "org.mozilla.firefox". The
+        // portal derives the app_id from the .desktop file, so on Arch the
+        // gateway receives "firefox" rather than "org.mozilla.firefox".
+        // Map it back so the request is still treated as privileged.
+        let effective_app_id: &str = if app_id.as_ref() == "firefox" {
+            "org.mozilla.firefox"
+        } else {
+            app_id.as_ref()
+        };
+        let mut privileged = trusted_clients.contains(&effective_app_id);
         if cfg!(debug_assertions) && !privileged {
             let trusted_clients_env = std::env::var("CREDSD_TRUSTED_APP_IDS").unwrap_or_default();
             privileged = trusted_clients_env

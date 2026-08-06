@@ -341,13 +341,25 @@ async fn validate_app_details(
         return Err(Error::SecurityError);
     };
 
-    if claimed_app_id.is_empty() || !super::should_trust_app_id(pid).await {
+    if !super::should_trust_app_id(pid).await {
         tracing::warn!(
             ?claimed_app_id,
             "App ID could not be verified. Rejecting request."
         );
         return Err(Error::SecurityError);
     }
+    // The sidecar portal may forward an empty app_id when it cannot
+    // identify the calling process (e.g., the Native Messaging shim is
+    // not in a cgroup or sandbox that the portal can inspect). Since the
+    // caller is already verified as a trusted caller above, fall back to
+    // the upstream Firefox app_id so the request is treated as
+    // privileged rather than rejected outright.
+    let claimed_app_id = if claimed_app_id.is_empty() {
+        tracing::debug!("Trusted caller sent empty app_id, using default");
+        "org.mozilla.firefox".to_string()
+    } else {
+        claimed_app_id
+    };
     // Now we can trust these app detail parameters.
     let Ok(app_id) = claimed_app_id.parse::<AppId>() else {
         tracing::warn!("Invalid app ID passed: {claimed_app_id}");

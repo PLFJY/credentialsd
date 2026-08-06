@@ -95,6 +95,18 @@ impl CredentialPortalBackend {
         .await?;
 
         let app_display_name = DesktopAppInfo::new(&format!("{app_id}.desktop"))
+            .or_else(|| {
+                // Fallback: some distributions (e.g., Arch Linux) use the
+                // short name without the reverse-DNS prefix as the desktop
+                // file name (e.g., "firefox.desktop" instead of
+                // "org.mozilla.firefox.desktop"). Try the last component
+                // after the final dot.
+                app_id
+                    .rsplit('.')
+                    .next()
+                    .filter(|last| *last != app_id.as_str())
+                    .and_then(|last| DesktopAppInfo::new(&format!("{last}.desktop")))
+            })
             .ok_or_else(|| {
                 fdo::Error::Failed(format!(
                     "Failed to retrieve app name for {app_id}: Could not find desktop file"
