@@ -97,8 +97,9 @@ impl CredentialPortalGateway {
         };
 
         tracing::debug!(
-            ?context,
-            ?request_json,
+            app_id = %context.app_id.as_ref(),
+            pid = context.pid,
+            request_len = request_json.len(),
             ?parent_window,
             "Received request for creating credential"
         );
@@ -153,9 +154,10 @@ impl CredentialPortalGateway {
             Err(err) => return Err(err).into(),
         };
 
-        tracing::trace!(
-            ?context,
-            %request_json,
+        tracing::debug!(
+            app_id = %context.app_id.as_ref(),
+            pid = context.pid,
+            request_len = request_json.len(),
             ?parent_window,
             "Received request for retrieving credential"
         );
@@ -341,13 +343,7 @@ async fn validate_app_details(
         return Err(Error::SecurityError);
     };
 
-    if claimed_app_id.is_empty() || !super::should_trust_app_id(pid).await {
-        tracing::warn!(
-            ?claimed_app_id,
-            "App ID could not be verified. Rejecting request."
-        );
-        return Err(Error::SecurityError);
-    }
+    let claimed_app_id = resolve_claimed_app_id(claimed_app_id, super::trusted_caller(pid).await)?;
     // Now we can trust these app detail parameters.
     let Ok(app_id) = claimed_app_id.parse::<AppId>() else {
         tracing::warn!("Invalid app ID passed: {claimed_app_id}");
@@ -374,6 +370,28 @@ async fn validate_app_details(
         pid,
         request_kind,
     })
+}
+
+/// Empty app IDs are tolerated only after the caller's D-Bus PID and exact
+/// executable have passed the trust check. Keep this policy small and testable.
+fn resolve_claimed_app_id(
+    claimed_app_id: String,
+    caller: Option<super::TrustedCaller>,
+) -> Result<String, Error> {
+    let Some(caller) = caller else {
+        tracing::warn!("App ID could not be verified. Rejecting request.");
+        return Err(Error::SecurityError);
+    };
+    if claimed_app_id.is_empty() {
+        if caller != super::TrustedCaller::Sidecar {
+            tracing::warn!("A non-sidecar caller sent an empty app ID. Rejecting request.");
+            return Err(Error::SecurityError);
+        }
+        tracing::debug!("Trusted sidecar caller sent empty app ID; using Firefox identity");
+        Ok("org.mozilla.firefox".to_string())
+    } else {
+        Ok(claimed_app_id)
+    }
 }
 
 async fn query_peer_pid_via_fdinfo(
@@ -436,4 +454,27 @@ async fn query_peer_pid_via_fdinfo(
     };
 
     Some(pid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{super::TrustedCaller, resolve_claimed_app_id};
+
+    #[test]
+    fn untrusted_empty_app_id_is_rejected() {
+        assert!(resolve_claimed_app_id(String::new(), None).is_err());
+    }
+
+    #[test]
+    fn trusted_standard_portal_empty_app_id_is_rejected() {
+        assert!(resolve_claimed_app_id(String::new(), Some(TrustedCaller::DesktopPortal)).is_err());
+    }
+
+    #[test]
+    fn trusted_empty_app_id_uses_exact_firefox_identity() {
+        assert_eq!(
+            resolve_claimed_app_id(String::new(), Some(TrustedCaller::Sidecar)).unwrap(),
+            "org.mozilla.firefox"
+        );
+    }
 }

@@ -229,7 +229,13 @@ fn validate_request(context: &RequestContext) -> Result<NavigationContext, WebAu
     Ok(request_environment)
 }
 
-async fn should_trust_app_id(pid: u32) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TrustedCaller {
+    DesktopPortal,
+    Sidecar,
+}
+
+async fn trusted_caller(pid: u32) -> Option<TrustedCaller> {
     // Verify if we should trust the peer based on the file name. We verify that
     // we're in the same mount namespace before using the exe path.
 
@@ -240,11 +246,11 @@ async fn should_trust_app_id(pid: u32) -> bool {
     // corresponds to the org.freedesktop.portal.Desktop D-Bus service unit.
     let Ok(my_mnt_ns) = tokio::fs::read_link("/proc/self/ns/mnt").await else {
         tracing::debug!("Could not read peer mount namespace");
-        return false;
+        return None;
     };
     let Ok(peer_mnt_ns) = tokio::fs::read_link(format!("/proc/{pid}/ns/mnt")).await else {
         tracing::debug!("Could not determine our mount namespace");
-        return false;
+        return None;
     };
     tracing::debug!(
         "mount namespace:\n  ours:   {:?}\n  theirs: {:?}",
@@ -253,12 +259,12 @@ async fn should_trust_app_id(pid: u32) -> bool {
     );
     if my_mnt_ns != peer_mnt_ns {
         tracing::warn!("Peer mount namespace is not the same as ours, not trusting the request.");
-        return false;
+        return None;
     }
 
     let Ok(exe_path) = tokio::fs::read_link(format!("/proc/{pid}/exe")).await else {
         tracing::warn!("Cannot read executable name from procfs");
-        return false;
+        return None;
     };
 
     tracing::debug!(?exe_path, %pid, "Found executable path:");
@@ -281,11 +287,18 @@ async fn should_trust_app_id(pid: u32) -> bool {
         ?exe_path,
         "Testing whether request is from trusted caller"
     );
-    if !trusted_callers.as_slice().contains(&exe_path) {
+    // The separately installed sidecar has one fixed executable path; do not
+    // broaden this to a directory, pattern, or user-controlled setting.
+    if exe_path.as_path() == Path::new("/usr/lib/credentials-portal-sidecar") {
+        Some(TrustedCaller::Sidecar)
+    } else if !trusted_callers.as_slice().contains(&exe_path) {
         tracing::warn!(?exe_path, "Request received from untrusted caller");
-        false
+        None
     } else {
-        true
+        // The sidecar has an intentionally separate classification. Its empty
+        // app-ID compatibility fallback must never apply to the standard portal
+        // or to debug-only trust entries.
+        Some(TrustedCaller::DesktopPortal)
     }
 }
 
@@ -299,7 +312,10 @@ fn check_origin_from_app(
             "org.mozilla.firefox",
             "xyz.iinuwa.credentialsd.DemoCredentialsUi",
         ];
-        let mut privileged = trusted_clients.contains(&app_id.as_ref());
+        // Arch's Firefox desktop entry is `firefox.desktop`, while the
+        // extension's canonical privileged identity is org.mozilla.firefox.
+        // This is intentionally an exact alias, not fuzzy matching.
+        let mut privileged = trusted_clients.contains(&canonical_privileged_app_id(app_id));
         if cfg!(debug_assertions) && !privileged {
             let trusted_clients_env = std::env::var("CREDSD_TRUSTED_APP_IDS").unwrap_or_default();
             privileged = trusted_clients_env
@@ -318,6 +334,14 @@ fn check_origin_from_app(
         Ok(RequestKind::Privileged { origin, top_origin })
     } else {
         Ok(RequestKind::Unprivileged(origin))
+    }
+}
+
+fn canonical_privileged_app_id(app_id: &AppId) -> &str {
+    if app_id.as_ref() == "firefox" {
+        "org.mozilla.firefox"
+    } else {
+        app_id.as_ref()
     }
 }
 
@@ -488,7 +512,7 @@ impl Display for WebAuthnError {
 mod test {
     use crate::webauthn::{NavigationContext, Origin};
 
-    use super::{WebAuthnError, check_origin_from_privileged_client};
+    use super::{WebAuthnError, canonical_privileged_app_id, check_origin_from_privileged_client};
 
     fn check_same_origin(origin: &str) -> Result<NavigationContext, WebAuthnError> {
         let origin = origin.parse().unwrap();
@@ -509,5 +533,13 @@ mod test {
             check_same_origin("app:com.example.App"),
             Err(WebAuthnError::SecurityError)
         ))
+    }
+
+    #[test]
+    fn arch_firefox_app_id_has_only_the_explicit_canonical_alias() {
+        let firefox = "firefox".parse().unwrap();
+        let arbitrary = "firefox-nightly".parse().unwrap();
+        assert_eq!(canonical_privileged_app_id(&firefox), "org.mozilla.firefox");
+        assert_eq!(canonical_privileged_app_id(&arbitrary), "firefox-nightly");
     }
 }

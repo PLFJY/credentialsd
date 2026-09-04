@@ -95,6 +95,13 @@ impl CredentialPortalBackend {
         .await?;
 
         let app_display_name = DesktopAppInfo::new(&format!("{app_id}.desktop"))
+            // Arch packages Firefox as firefox.desktop, while its canonical
+            // portal app ID is org.mozilla.firefox. Keep this fallback narrow.
+            .or_else(|| {
+                (app_id == "org.mozilla.firefox")
+                    .then(|| DesktopAppInfo::new("firefox.desktop"))
+                    .flatten()
+            })
             .ok_or_else(|| {
                 fdo::Error::Failed(format!(
                     "Failed to retrieve app name for {app_id}: Could not find desktop file"
