@@ -11,6 +11,7 @@ version = meson.project_version()
 prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 libdir = prefix / get_option('libdir')
+datadir = prefix / get_option('datadir')
 localedir = prefix / get_option('localedir')
 
 cargo_home = get_option('cargo_home')

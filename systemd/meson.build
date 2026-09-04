@@ -19,3 +19,10 @@ configure_file(
   output: 'xyz.iinuwa.credentialsd.UiControl.service',
   configuration: systemd_config,
 )
+
+# The named unit is provided by the xdg-desktop-portal sidecar package. The
+# drop-in intentionally does not affect xdg-desktop-portal.service.
+install_data(
+  'credentials-portal-sidecar.service.d' / 'credentials-sidecar.conf',
+  install_dir: systemd_user_service_dir / 'credentials-portal-sidecar.service.d',
+)
