@@ -7,6 +7,7 @@ addon_app_config.set(
 )
 
 addon_app_config.set('APP_ID', 'org.mozilla.firefox')
+addon_app_config.set('PORTAL_BUS_NAME', get_option('firefox_portal_bus_name'))
 native_messaging_manifest_dir = libdir / 'mozilla' / 'native-messaging-hosts'
 
 configure_file(
@@ -14,6 +15,13 @@ configure_file(
   install_dir: native_messaging_manifest_dir,
   output: 'xyz.iinuwa.credentialsd_helper.json',
   configuration: addon_app_config,
+)
+
+test(
+  'unit/sidecar-build-routing',
+  find_program('python3'),
+  args: [meson.project_source_root() / 'tests' / 'test_sidecar_build.py', meson.project_build_root(), get_option('firefox_portal_bus_name')],
+  suite: ['unit'],
 )
 
 configure_file(

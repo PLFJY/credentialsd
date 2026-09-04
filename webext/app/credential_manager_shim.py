@@ -27,6 +27,9 @@ logging.basicConfig(
 
 APP_ID = "@APP_ID@"
 DBUS_DOC_FILE = "@DBUS_DOC_FILE@"
+# This value is substituted by Meson. It is deliberately not configurable by
+# page content, extension messages, environment variables, or runtime IPC.
+PORTAL_BUS_NAME = "@PORTAL_BUS_NAME@"
 INTERFACE: Optional[BaseProxyInterface] = None
 
 
@@ -37,16 +40,13 @@ def getMessage():
     if len(rawLength) == 0:
         sys.exit(0)
     try:
-        logging.debug(f"unpacking struct: {rawLength}")
         messageLength = struct.unpack("@I", rawLength)[0]
         logging.debug(f"reading {messageLength} bytes")
     except Exception as e:
         logging.error("Failed to convert rawLength to integer", exc_info=e)
     try:
         raw_msg = sys.stdin.buffer.read(messageLength)
-        logging.debug(f"received bytes: {raw_msg}")
         message = raw_msg.decode("utf-8")
-        logging.debug("received " + message)
         return json.loads(message)
     except Exception as e:
         logging.error("Failed to read message")
@@ -118,7 +118,7 @@ def sendMessage(encodedMessage):
     sys.stdout.buffer.write(encodedMessage["length"])
     sys.stdout.buffer.write(encodedMessage["content"])
     sys.stdout.buffer.flush()
-    logging.debug(f"sent message: {encodedMessage}")
+    logging.debug("sent response: %d bytes", len(encodedMessage["content"]))
 
 
 def b64_encode(data: bytes) -> str:
@@ -408,7 +408,6 @@ class AuthenticatorData:
 async def create_passkey(interface, options, origin, top_origin):
     logging.debug("Creating passkey")
     req_json = json.dumps(options)
-    logging.debug(req_json)
     request_event = create_portal_request_message_handler(interface.bus)
     req = {
         "handle_token": Variant("s", request_event.token),
@@ -444,7 +443,6 @@ async def get_passkey(interface, options, origin, top_origin):
     logging.debug("Authenticating with passkey")
     is_same_origin = origin == top_origin
     req_json = json.dumps(options)
-    logging.debug(req_json)
     req = {
         "type": Variant("s", "publicKey"),
         "origin": Variant("s", origin),
@@ -485,7 +483,7 @@ async def get_interface():
     logging.info(os.getcwd())
 
     msg = Message(
-        "org.freedesktop.portal.Desktop",
+        PORTAL_BUS_NAME,
         "/org/freedesktop/portal/desktop",
         "org.freedesktop.host.portal.Registry",
         "Register",
@@ -501,7 +499,7 @@ async def get_interface():
         introspection = f.read()
 
     proxy_object = bus.get_proxy_object(
-        "org.freedesktop.portal.Desktop",
+        PORTAL_BUS_NAME,
         "/org/freedesktop/portal/desktop",
         introspection,
     )

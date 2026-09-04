@@ -22,3 +22,9 @@ option(
   value: false,
   description: 'Whether to perform an offline build with Cargo. Defaults to false to download crates from registries.',
 )
+option(
+  'firefox_portal_bus_name',
+  type: 'string',
+  value: 'org.freedesktop.portal.Desktop',
+  description: 'Build-time D-Bus destination for the Firefox Native Messaging Credential portal helper.',
+)
