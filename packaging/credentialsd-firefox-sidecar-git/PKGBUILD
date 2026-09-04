@@ -1,0 +1,67 @@
+# Maintainer: PLFJY <plfjy@plfjy.top>
+# Native sidecar integration only; Firefox obtains the Mozilla-signed XPI from
+# the GitHub Release, never from this package.
+pkgname=credentialsd-firefox-sidecar-git
+pkgver=r1
+pkgrel=1
+pkgdesc='credentialsd Credential Portal sidecar and Firefox Native Messaging helper'
+arch=('x86_64')
+url='https://github.com/PLFJY/credentialsd'
+license=('LGPL-3.0-only' 'LGPL-2.1-or-later')
+# This concerns makepkg C/C++ flags. It is intentionally independent from
+# Cargo's upstream [profile.release] lto=true configuration.
+options=(!lto)
+depends=('dbus' 'glib2' 'gtk4' 'openssl' 'systemd-libs' 'pcsclite' 'libnfc' 'hidapi'
+         'hicolor-icon-theme' 'json-glib' 'fuse3' 'gdk-pixbuf2' 'gst-plugins-base-libs'
+         'libpipewire' 'libwireplumber' 'libdex' 'geoclue' 'systemd' 'python-dbus-next')
+makedepends=('meson' 'ninja' 'rust' 'git' 'cargo' 'zip' 'pkgconf' 'gettext')
+source=(
+  "credentialsd::git+https://github.com/PLFJY/credentialsd.git#branch=integration/credential-portal-sidecar"
+  "xdg-desktop-portal::git+https://github.com/PLFJY/xdg-desktop-portal.git#branch=sidecar/credential-portal"
+)
+sha256sums=('SKIP' 'SKIP')
+
+pkgver() {
+  cd "$srcdir/credentialsd"
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$srcdir/xdg-desktop-portal"
+  meson setup build --prefix=/usr --libexecdir=/usr/lib \
+    -Dportal_bus_name=io.github.PLFJY.CredentialPortal \
+    -Dportal_binary_name=credentials-portal-sidecar \
+    -Dportal_systemd_unit_name=credentials-portal-sidecar.service \
+    -Dportal_dbus_service_name=io.github.PLFJY.CredentialPortal.service \
+    -Dsidecar_install=true -Dgeoclue=enabled -Dgudev=disabled \
+    -Dflatpak-interfaces=disabled -Dsystemd=enabled -Dtests=disabled \
+    -Ddocumentation=disabled -Dman-pages=disabled
+  ninja -C build
+
+  cd "$srcdir/credentialsd"
+  meson setup build --prefix=/usr -Dprofile=default -Dcargo_locked=true \
+    -Dfirefox_portal_bus_name=io.github.PLFJY.CredentialPortal
+  ninja -C build
+}
+
+package() {
+  cd "$srcdir/xdg-desktop-portal"
+  meson install -C build --destdir="$pkgdir"
+  cd "$srcdir/credentialsd"
+  meson install -C build --destdir="$pkgdir"
+
+  rm -f "$pkgdir/usr/share/credentialsd/credentialsd-firefox-helper.xpi" \
+        "$pkgdir/usr/share/credentialsd/credentialsd-chromium-helper.zip"
+  if find "$pkgdir" -type f \( -name '*.xpi' -o -name '*chromium*.zip' \) -print -quit | grep -q .; then
+    error 'browser extension archive unexpectedly remained in package root'
+    return 1
+  fi
+  test -f "$pkgdir/usr/lib/credentials-portal-sidecar"
+  test -f "$pkgdir/usr/share/dbus-1/services/io.github.PLFJY.CredentialPortal.service"
+  test -f "$pkgdir/usr/lib/systemd/user/credentials-portal-sidecar.service"
+  test -f "$pkgdir/usr/lib/systemd/user/credentials-portal-sidecar.service.d/credentials-sidecar.conf"
+  test -f "$pkgdir/usr/share/xdg-desktop-portal/credentials-sidecar-portals.conf"
+  for forbidden in portals.conf gnome-portals.conf kde-portals.conf hyprland-portals.conf; do
+    test ! -e "$pkgdir/usr/share/xdg-desktop-portal/$forbidden" || return 1
+  done
+}
