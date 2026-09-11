@@ -18,12 +18,25 @@ makedepends=('meson' 'ninja' 'rust' 'git' 'cargo' 'zip' 'pkgconf' 'gettext')
 source=(
   "credentialsd::git+https://github.com/PLFJY/credentialsd.git#branch=integration/credential-portal-sidecar"
   "xdg-desktop-portal::git+https://github.com/PLFJY/xdg-desktop-portal.git#branch=sidecar/credential-portal"
+  "libglnx::git+https://github.com/GNOME/libglnx.git#commit=ff64d52116ae74f0d25e24f089db28921ea171ff"
+  "gvdb::git+https://github.com/GNOME/gvdb.git#commit=c6f2359cc1d00f16e0a0e2527fa0bc1882b8b5ab"
 )
-sha256sums=('SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 pkgver() {
   cd "$srcdir/credentialsd"
   printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/xdg-desktop-portal"
+
+  # Meson would otherwise clone both wrap dependencies from GNOME GitLab
+  # during build(). Use the exact revisions from the wrap files, fetched by
+  # makepkg from GNOME's official GitHub mirrors during source preparation.
+  rm -rf subprojects/libglnx subprojects/gvdb
+  ln -s "$srcdir/libglnx" subprojects/libglnx
+  ln -s "$srcdir/gvdb" subprojects/gvdb
 }
 
 build() {
