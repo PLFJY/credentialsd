@@ -1,7 +1,11 @@
 # [unreleased]
 
+# 0.3.1 [2026-09-05]
+
 ## Improvements
 
+- daemon: Fix failure to activate UI service automatically.
+- daemon: Decrease USB logging level.
 - ui: Remove process ID from credential prompt.
 
 # 0.3.0 [2026-08-27]
